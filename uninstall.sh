@@ -9,4 +9,4 @@ SERVICE_NAME="adsb-dashboard.service"
 sudo systemctl disable --now "$SERVICE_NAME" || true
 sudo rm -f "/etc/systemd/system/$SERVICE_NAME"
 sudo systemctl daemon-reload
-echo "Service removed. Data left in \${ADSB_DATA_DIR:-\$HOME/adsb-dashboard}."
+echo "Service removed. Settings and flight history are still in ${ADSB_DATA_DIR:-$HOME/adsb-dashboard}."

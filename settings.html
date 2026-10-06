@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · ADS-B Ground Station</title>
+<style>
+  :root{
+    --page:#f3f5f8; --surface:#ffffff; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#7a8594;
+    --line:#dfe3e9; --accent:#2a78d6; --accent-soft:#e7f0fb;
+    --good:#0a8f0a; --warning:#b98100; --warning-soft:#fdf4dc; --critical:#d03b3b; --critical-soft:#fbe9e9;
+    --font-body:-apple-system,"Segoe UI",system-ui,sans-serif;
+    --font-data:ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --page:#0a0e13; --surface:#121922; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
+      --line:#232e3b; --accent:#5b9bec; --accent-soft:#182536;
+      --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
+      color-scheme: dark;
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:var(--page);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.45;
+    padding:20px 16px 48px;max-width:980px;margin-inline:auto;}
+  h1,h2,p{margin:0;}
+  a{color:var(--accent);}
+  code,.mono{font-family:var(--font-data);font-size:.92em;}
+  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px;}
+  .eyebrow{font-family:var(--font-data);font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:6px;}
+  header h1{font-family:var(--font-data);font-size:1.5rem;font-weight:600;}
+  .where{margin-top:6px;font-size:.86rem;color:var(--ink-soft);}
+  .where a{text-decoration:none;} .where a:hover{text-decoration:underline;}
+  section{margin-bottom:32px;}
+  h2{font-size:1rem;font-weight:600;margin-bottom:10px;}
+  .lead{color:var(--ink-soft);max-width:68ch;margin-bottom:12px;}
+
+  .problems{display:grid;gap:6px;margin-bottom:24px;}
+  .problem{background:var(--warning-soft);border:1px solid var(--warning);border-radius:7px;padding:9px 12px;}
+  .problem b{font-family:var(--font-data);font-size:.72rem;letter-spacing:.08em;color:var(--warning);margin-right:8px;}
+
+  .checks{margin:0;padding:0;list-style:none;border-top:1px solid var(--line);}
+  .checks li{display:grid;grid-template-columns:14px minmax(9rem,14rem) minmax(0,1fr);gap:10px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line);}
+  .checks .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-mute);align-self:center;}
+  .checks .ok .dot{background:var(--good);} .checks .warn .dot{background:var(--warning);}
+  .checks .name{font-weight:500;}
+  .checks .detail{color:var(--ink-soft);min-width:0;}
+  .checks .warn .detail{color:var(--ink);}
+  @media (max-width:600px){ .checks li{grid-template-columns:14px minmax(0,1fr);} .checks .detail{grid-column:2;} }
+
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);}
+  table{width:100%;border-collapse:collapse;}
+  th{text-align:left;font-size:.8rem;color:var(--ink-mute);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--line);}
+  td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td.opt{width:62%;}
+  td.opt .key{font-family:var(--font-data);font-weight:600;}
+  td.opt .env{font-family:var(--font-data);color:var(--ink-mute);font-size:.8em;margin-left:8px;}
+  td.opt .desc{color:var(--ink-soft);margin-top:3px;}
+  td.val{font-family:var(--font-data);overflow-wrap:anywhere;}
+  td.val .unset{color:var(--ink-mute);font-family:var(--font-body);}
+  td.val .src{display:table;margin-top:5px;font-family:var(--font-body);}
+  @media (max-width:600px){ td.opt{width:auto;} td.opt .env{display:block;margin:2px 0 0;} }
+  .src{display:inline-block;font-size:.75rem;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--ink-mute);white-space:nowrap;}
+  .src.file{color:var(--accent);border-color:var(--accent);}
+  .src.env{color:var(--warning);border-color:var(--warning);}
+
+  .howto{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .howto ol{margin:8px 0 0;padding-left:1.3em;display:grid;gap:10px;}
+  .howto li{min-width:0;}
+  .cmd{display:flex;align-items:center;gap:8px;margin-top:5px;max-width:100%;}
+  .cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--page);border:1px solid var(--line);border-radius:7px;padding:7px 10px;}
+  .cmd button{font:500 12px var(--font-body);color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 10px;cursor:pointer;white-space:nowrap;}
+  .cmd button:hover{color:var(--ink);}
+  button:focus-visible, a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .note{font-size:.84rem;color:var(--ink-mute);margin-top:10px;}
+
+  dl.about{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 18px;margin:0;}
+  dl.about dt{color:var(--ink-soft);} dl.about dd{margin:0;font-family:var(--font-data);overflow-wrap:anywhere;}
+  .empty{color:var(--ink-mute);padding:12px 0;}
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">readsb / dump1090</p>
+  <h1>Settings</h1>
+  <p class="where"><a href="/">Dashboard</a> · Settings</p>
+</header>
+
+<div id="problems" class="problems" aria-live="polite"></div>
+
+<section>
+  <h2>Station checks</h2>
+  <ul class="checks" id="checks"><li class="empty">Checking</li></ul>
+</section>
+
+<section>
+  <h2>Current settings</h2>
+  <p class="lead">These are read from <code id="settings-path">settings.ini</code>. This page only shows them; to keep the dashboard safe without a login, changes are made on the Pi itself.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Value, and where it comes from</th></tr></thead>
+      <tbody id="settings-rows"><tr><td colspan="2" class="empty">Loading</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>How to change a setting</h2>
+  <div class="howto">
+    <ol>
+      <li>On the Pi, open the settings file and edit the line for the option. Remove the <code>#</code> at the start of the line to use it.
+        <div class="cmd"><code id="cmd-edit">nano ~/adsb-dashboard/settings.ini</code><button type="button" data-copy="cmd-edit">Copy</button></div></li>
+      <li>Restart the dashboard to apply it.
+        <div class="cmd"><code id="cmd-restart">sudo systemctl restart adsb-dashboard</code><button type="button" data-copy="cmd-restart">Copy</button></div></li>
+      <li>Reload this page and check the value and where it comes from.</li>
+    </ol>
+    <p class="note">A setting marked <span class="src env">environment</span> comes from the service file and overrides settings.ini. Remove that <code>Environment=</code> line from <code>/etc/systemd/system/adsb-dashboard.service</code> if you'd rather manage it in settings.ini.</p>
+  </div>
+</section>
+
+<section>
+  <h2>About</h2>
+  <dl class="about" id="about"></dl>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const SRC = {"settings.ini": ["file", "settings.ini"], "environment": ["env", "environment"], "default": ["", "default"]};
+
+function fmtValue(row){
+  const v = row.value;
+  if (v === null || v === "") return '<span class="unset">not set</span>';
+  if (row.type === "bool") return v ? "yes" : "no";
+  return esc(v);
+}
+
+async function load(){
+  let d;
+  try { d = await (await fetch("/api/settings")).json(); }
+  catch(e){ $("checks").innerHTML = '<li class="empty">Could not reach the dashboard service.</li>'; return; }
+
+  $("problems").innerHTML = d.errors.map(e => `<div class="problem"><b>CAUTION</b>${esc(e)}</div>`).join("");
+
+  $("checks").innerHTML = d.checks.map(c =>
+    `<li class="${esc(c.state)}"><span class="dot" aria-hidden="true"></span><span class="name">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`
+  ).join("");
+
+  $("settings-path").textContent = d.settings_file;
+  $("cmd-edit").textContent = "nano " + d.settings_file;
+  $("settings-rows").innerHTML = d.settings.map(r => {
+    const [cls, label] = SRC[r.source] || ["", r.source];
+    return `<tr><td class="opt"><span class="key">${esc(r.key)}</span><span class="env">${esc(r.env)}</span>` +
+      `<div class="desc">${esc(r.description)}</div></td>` +
+      `<td class="val">${fmtValue(r)}<span class="src ${cls}">${label}</span></td></tr>`;
+  }).join("");
+
+  $("about").innerHTML = [
+    ["Version", d.version], ["Python", d.python], ["Data folder", d.data_dir],
+    ["Settings file", d.settings_file + (d.settings_file_exists ? "" : " (not created yet, so defaults apply)")],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+}
+
+document.querySelectorAll("[data-copy]").forEach(btn => btn.addEventListener("click", async () => {
+  const text = $(btn.dataset.copy).textContent;
+  try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+  catch(e){ const r = document.createRange(); r.selectNodeContents($(btn.dataset.copy)); getSelection().removeAllRanges(); getSelection().addRange(r); btn.textContent = "Selected"; }
+  setTimeout(() => btn.textContent = "Copy", 1500);
+}));
+
+load();
+</script>
+</body>
+</html>

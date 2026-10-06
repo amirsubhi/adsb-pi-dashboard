@@ -1,0 +1,6 @@
+Server status:   synchronized with 112 nearby receivers
+Receiver:  connected     151.9 msg/s received       42.5 msg/s processed (28%)
+Server:    connected       0.4 kB/s from server    1.1 kB/s TCP to server
+Results:  12.0 positions/minute
+peer_count: 17
+Receiver:  connected     160.2 msg/s received       44.1 msg/s processed (27%)

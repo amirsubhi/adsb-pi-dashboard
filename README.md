@@ -40,7 +40,7 @@ are loaded, so it keeps working even if the box's internet connection drops
 - A Linux host running [readsb](https://github.com/wiedehopf/readsb) or a
   compatible decoder (dump1090-fa, etc.) that writes `aircraft.json` /
   `stats.json` to a local directory (default `/run/readsb`).
-- Python 3.7+ (standard library only — nothing to `pip install`).
+- Python 3.7+ (standard library only — nothing to `pip install`). Tested on 3.9, 3.11 and 3.13.
 - `fr24feed` and/or `adsbexchange-feed`/`adsbexchange-mlat` are both
   **optional**. Whichever isn't installed just shows as "Not installed" on
   its card instead of erroring.
@@ -61,9 +61,14 @@ cd adsb-pi-dashboard
 ./install.sh
 ```
 
-This copies `app.py` and `dashboard.html` into `~/adsb-dashboard`, installs
-a systemd service running as your current user, and starts it. The script
-prints the dashboard URL (`http://<this host's IP>:8099/`) when done.
+This copies the program into `~/adsb-dashboard`, creates `settings.ini`
+there, installs a systemd service running as your current user, and starts
+it. On a first install it asks for your country's transition altitude, and
+for the receiver position if readsb doesn't report it. When it finishes it
+prints the dashboard URL (`http://<this Pi's IP>:8099/`).
+
+To update, pull the latest code and run `./install.sh` again. Your settings
+and flight history are kept.
 
 To remove it:
 
@@ -77,25 +82,61 @@ To remove it:
 python3 app.py
 ```
 
-It listens on `0.0.0.0:8099` and writes its SQLite database and reads
-`dashboard.html` from `~/adsb-dashboard` by default.
+It listens on `0.0.0.0:8099` and reads `settings.ini` and its pages from
+`~/adsb-dashboard` by default (set `ADSB_DATA_DIR` to use another folder).
 
-## Configuration
+## Settings
 
-All optional, set as environment variables before starting the service
-(edit the `[Service]` block in
-`/etc/systemd/system/adsb-dashboard.service` to add `Environment=` lines,
-then `sudo systemctl daemon-reload && sudo systemctl restart adsb-dashboard`):
+Settings live in `~/adsb-dashboard/settings.ini`. Every option is commented
+out with its default; remove the `#` and change the value, then restart:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `ADSB_DASHBOARD_PORT` | `8099` | Port the dashboard listens on |
-| `ADSB_READSB_DIR` | `/run/readsb` | Where `aircraft.json` / `stats.json` live |
-| `ADSB_ADSBX_DIR` | `/run/adsbexchange-feed` | Where ADSBExchange's `status.json` / `receiver.json` live |
-| `ADSB_POLL_INTERVAL` | `15` | Seconds between samples |
-| `ADSB_SESSION_GAP` | `300` | Seconds an aircraft can be absent before its next sighting starts a new history entry |
-| `ADSB_RETAIN_DAYS` | `30` | How long history and metrics are kept |
-| `ADSB_DATA_DIR` | `~/adsb-dashboard` | Where the SQLite database and `dashboard.html` are read from |
+```bash
+nano ~/adsb-dashboard/settings.ini
+sudo systemctl restart adsb-dashboard
+```
+
+The **Settings** page (`http://<this Pi's IP>:8099/settings`, linked from the
+dashboard footer) shows every value in effect and where it came from, plus
+checks for the common setup problems: readsb data missing or stale, no
+receiver position, the service unable to read the system journal, low disk
+space. The page is read-only on purpose. A page that could change settings
+would need a login to be safe on a network, and this dashboard has none.
+
+| Option | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `port` | `ADSB_DASHBOARD_PORT` | `8099` | Port the dashboard listens on |
+| `bind` | `ADSB_BIND` | `0.0.0.0` | Address to listen on; `127.0.0.1` for this Pi only |
+| `readsb_dir` | `ADSB_READSB_DIR` | `/run/readsb` | Where `aircraft.json` / `stats.json` live |
+| `adsbx_dir` | `ADSB_ADSBX_DIR` | `/run/adsbexchange-feed` | Where ADSBExchange's `status.json` / `receiver.json` live |
+| `poll_interval` | `ADSB_POLL_INTERVAL` | `15` | Seconds between samples |
+| `session_gap` | `ADSB_SESSION_GAP` | `300` | Seconds an aircraft can be absent before its next sighting starts a new history entry |
+| `retain_days` | `ADSB_RETAIN_DAYS` | `30` | How long history and metrics are kept |
+| `receiver_lat`, `receiver_lon` | `ADSB_LAT`, `ADSB_LON` | not set | Receiver position, if readsb doesn't report it |
+| `transition_alt` | `ADSB_TRANSITION_ALT` | `18000` | Feet above which altitudes show as flight levels (Malaysia 11000, UK 6000) |
+| `show_exact_location` | `ADSB_SHOW_EXACT_LOCATION` | `no` | Show exact receiver coordinates instead of rounding to ~1 km |
+| `cors_origin` | `ADSB_CORS_ORIGIN` | not set | One other website allowed to read the API |
+
+An environment variable overrides `settings.ini`. If you configured an
+older version with `Environment=` lines in the service file, `install.sh`
+moves them into `settings.ini` when you update. `ADSB_DATA_DIR`
+(default `~/adsb-dashboard`) chooses the data folder itself and can only be
+set as an environment variable.
+
+## Security
+
+The dashboard is built for a home network:
+
+- **It has no login. Don't port-forward it to the internet.** For remote
+  access, use a VPN such as [Tailscale](https://tailscale.com) or WireGuard.
+- Other websites open in your browser can't read its API. Before 1.1 the API
+  allowed any site to, which could expose your receiver's location. Use
+  `cors_origin` if you build something that needs access.
+- The receiver position is rounded to about 1 km on the page unless you turn
+  on `show_exact_location`, so screenshots don't give away your address.
+- Pages are served with a Content Security Policy and the usual protective
+  headers, and everything shown on a page is escaped.
+- The systemd service runs as your user with a read-only view of the system
+  (it can only write to its data folder) and no way to gain privileges.
 
 ## API
 
@@ -108,8 +149,30 @@ things on top of it:
   last N hours, newest first.
 - `GET /api/metrics?hours=6` — raw `(timestamp, temp_c, aircraft_count)`
   samples for the trend sparklines.
+- `GET /api/settings` — settings in effect and the station checks shown on
+  the Settings page.
 
-All responses are JSON with `Access-Control-Allow-Origin: *`.
+All responses are JSON. An invalid `hours` value returns `400` with an
+`error` message.
+
+## Development
+
+Everything is standard-library Python; there is nothing to install.
+
+```bash
+# Simulated receiver, so you can work without an antenna
+python3 tools/fake_readsb.py --dir /tmp/fake-readsb &
+
+# Dashboard against it, using the repo's own pages
+ADSB_DATA_DIR="$PWD" ADSB_READSB_DIR=/tmp/fake-readsb python3 app.py
+
+# Tests
+python3 -m unittest discover -s tests -v
+shellcheck install.sh uninstall.sh
+```
+
+GitHub Actions runs the tests on Python 3.9, 3.11 and 3.13 (the versions
+Raspberry Pi OS ships) plus `shellcheck` on every push and pull request.
 
 ## How flight history works
 
