@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live map · ADS-B Ground Station</title>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<style>
+/* Layout: list rail left, map right; map over list on phones. Tokens, type and radii mirror dashboard.html. */
+:root {
+  --page: #f3f5f8; --surface: #ffffff; --surface-2: #eef1f5; --ink: #121820; --ink-soft: #4e5a68; --ink-mute: #7a8594;
+  --line: #dfe3e9; --line-strong: #c5ccd6; --accent: #2a78d6; --accent-soft: #e7f0fb;
+  --good: #0ca30c; --danger: #d03b3b; --danger-soft: #fbe9e9; --danger-ink: #a72222;
+  --map-sea: #dfe7ee; --map-land: #f7f8fa; --map-border: #b9c3ce; --map-grat: #e6ebf0; --map-ring: #8fa3b8; --ring-ink: #6d7f91;
+  --label-ink: #1b2430; --label-halo: rgba(255,255,255,0.95); --plane-stroke: rgba(18,24,32,0.75);
+  --font-body: -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-data: ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --page: #0a0e13; --surface: #121922; --surface-2: #18212c; --ink: #e9edf2; --ink-soft: #9fabba; --ink-mute: #6f7c8b;
+  --line: #232e3b; --line-strong: #34465a; --accent: #5b9bec; --accent-soft: #182536;
+  --good: #3fc23f; --danger: #e2615f; --danger-soft: #2a1618; --danger-ink: #ffb3b5;
+  --map-sea: #0a0f14; --map-land: #111a22; --map-border: #2b3c4c; --map-grat: #152029; --map-ring: #2f4a60; --ring-ink: #546a7d;
+  --label-ink: #d3dee7; --label-halo: rgba(0,0,0,0.9); --plane-stroke: rgba(0,0,0,0.7);
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --page: #0a0e13; --surface: #121922; --surface-2: #18212c; --ink: #e9edf2; --ink-soft: #9fabba; --ink-mute: #6f7c8b;
+  --line: #232e3b; --line-strong: #34465a; --accent: #5b9bec; --accent-soft: #182536;
+  --good: #3fc23f; --danger: #e2615f; --danger-soft: #2a1618; --danger-ink: #ffb3b5;
+  --map-sea: #0a0f14; --map-land: #111a22; --map-border: #2b3c4c; --map-grat: #152029; --map-ring: #2f4a60; --ring-ink: #546a7d;
+  --label-ink: #d3dee7; --label-halo: rgba(0,0,0,0.9); --plane-stroke: rgba(0,0,0,0.7);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--page); color: var(--ink); font-family: var(--font-body); font-size: 14px; overflow: hidden; }
+.app { display: grid; grid-template-columns: 340px minmax(0, 1fr); height: 100%; }
+.mono { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+
+/* ---------- segmented controls (sort, theme, map toolbar) ---------- */
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; background: var(--surface); flex: none; }
+.seg button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--ink-soft); font: 500 12px var(--font-body); padding: 6px 10px; cursor: pointer; }
+.seg button:first-child { border-left: 0; }
+.seg button:hover { color: var(--ink); background: var(--surface-2); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.seg button:focus-visible, .row:focus-visible, .card-close:focus-visible, .back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---------- list rail ---------- */
+.rail { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--line); }
+.rail-head { padding: 16px 16px 12px; display: grid; gap: 12px; border-bottom: 1px solid var(--line); }
+.title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.eyebrow { font-family: var(--font-data); font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--accent); margin: 0 0 4px; }
+h1 { font-family: var(--font-data); font-size: 1.05rem; font-weight: 600; margin: 0; }
+.where-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: -6px; }
+.statline span { white-space: nowrap; }
+.where { margin: 0; font-size: 12.5px; color: var(--ink-soft); }
+.back { color: var(--accent); text-decoration: none; }
+.back:hover { text-decoration: underline; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-data); font-size: 11px; font-weight: 500; padding: 3px 9px 3px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink-soft); white-space: nowrap; }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-mute); }
+.pill.live { color: var(--good); } .pill.live .dot { background: var(--good); }
+.pill.stale { color: var(--danger-ink); border-color: var(--danger); } .pill.stale .dot { background: var(--danger); }
+.statline { font-family: var(--font-data); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; margin: 0; line-height: 1.5; }
+.statline b { color: var(--ink); font-weight: 600; }
+.search { width: 100%; background: var(--page); border: 1px solid var(--line); color: var(--ink); border-radius: 7px; padding: 8px 11px; font: inherit; }
+.search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.sort-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--ink-mute); }
+
+.list { overflow-y: auto; flex: 1; min-height: 0; }
+.row { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; gap: 0 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.row:hover { background: var(--surface-2); }
+.row.sel { background: var(--accent-soft); }
+.row .glyph { grid-row: span 2; width: 22px; height: 22px; }
+.row .glyph svg { display: block; overflow: visible; stroke: var(--plane-stroke); stroke-width: 2.2px; stroke-linejoin: round; paint-order: stroke; }
+.row .cs { font-family: var(--font-data); font-weight: 600; font-size: 13.5px; }
+.row .sub { font-size: 11.5px; color: var(--ink-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .alt { font-family: var(--font-data); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.row .dist { font-family: var(--font-data); font-size: 11.5px; color: var(--ink-mute); text-align: right; font-variant-numeric: tabular-nums; }
+.row.emg { background: var(--danger-soft); }
+.row.emg .cs { color: var(--danger-ink); }
+.sq { font-family: var(--font-data); font-size: 10.5px; font-weight: 600; color: #fff; background: var(--danger); border-radius: 4px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+.empty { padding: 24px 16px; color: var(--ink-mute); }
+
+/* ---------- map ---------- */
+.stage { position: relative; min-width: 0; min-height: 0; }
+#map { position: absolute; inset: 0; background: var(--map-sea); }
+.map-err { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-mute); padding: 24px; text-align: center; }
+.tiles-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.6); }
+.leaflet-outline-pane { pointer-events: none; }
+.toolbar { position: absolute; top: 12px; left: 12px; right: 56px; display: flex; gap: 8px; flex-wrap: wrap; z-index: 1000; }
+
+.legend { position: absolute; right: 12px; bottom: 30px; z-index: 1000; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; width: 214px; }
+.legend .cap { font-size: 12px; color: var(--ink-soft); margin-bottom: 7px; }
+.legend .ramp { height: 6px; border-radius: 3px; }
+.legend .ticks { display: flex; justify-content: space-between; font-family: var(--font-data); font-size: 10px; color: var(--ink-mute); margin-top: 4px; }
+.legend .note { font-size: 11.5px; color: var(--ink-mute); margin: 8px 0 0; line-height: 1.4; }
+
+.card { position: absolute; left: 12px; bottom: 30px; z-index: 1001; width: 292px; max-width: calc(100% - 24px); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 14px 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.12); }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.card h2 { margin: 0; font-family: var(--font-data); font-size: 20px; font-weight: 600; }
+.card .meta { color: var(--ink-soft); font-size: 12.5px; margin-top: 2px; }
+.card-close { background: transparent; border: 0; color: var(--ink-mute); font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.card .alert { margin-top: 10px; background: var(--danger-soft); color: var(--danger-ink); border: 1px solid var(--danger); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; }
+.card .alert b { font-family: var(--font-data); }
+.card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; margin: 12px 0 0; }
+.card dt { font-size: 11.5px; color: var(--ink-mute); }
+.card dd { margin: 1px 0 0; font-family: var(--font-data); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.card dd small { font-family: var(--font-body); font-size: 11.5px; color: var(--ink-soft); }
+
+.lbl { font-family: var(--font-data); font-size: 10.5px; font-weight: 500; color: var(--label-ink); text-shadow: 0 0 2px var(--label-halo), 0 0 4px var(--label-halo), 0 0 6px var(--label-halo); white-space: nowrap; pointer-events: none; }
+.ring-lbl { font-family: var(--font-data); font-size: 10px; color: var(--ring-ink); pointer-events: none; text-align: center; }
+
+.leaflet-container { background: var(--map-sea); font: inherit; }
+.leaflet-bar { border: 1px solid var(--line-strong) !important; box-shadow: none !important; border-radius: 7px !important; }
+.leaflet-bar a { background: var(--surface); color: var(--ink); border-bottom-color: var(--line); }
+.leaflet-bar a:hover { background: var(--surface-2); color: var(--ink); }
+.leaflet-control-attribution { background: var(--surface) !important; color: var(--ink-mute); font-size: 10.5px; border-top-left-radius: 6px; }
+.leaflet-control-attribution a { color: var(--ink-soft); }
+.ac-wrap { background: none; border: 0; }
+.ac { position: relative; width: 24px; height: 24px; cursor: pointer; }
+.ac svg { display: block; overflow: visible; fill: var(--c); stroke: var(--plane-stroke); stroke-width: 2.2px; stroke-linejoin: round; paint-order: stroke; transform-origin: 50% 50%; }
+.ac .lbl { position: absolute; left: 26px; top: 5px; }
+.ac.emg .lbl { color: var(--danger); }
+.ac.sel svg { scale: 1.25; }
+.ac.old { opacity: .45; }
+.ac.sel::before, .ac.emg::before { content: ""; position: absolute; inset: -9px; border-radius: 50%; border: 1.5px solid var(--accent); }
+.ac.emg::before { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 16%, transparent); }
+.no-labels .ac .lbl { display: none; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0, 58%) minmax(0, 42%); }
+  .stage { grid-row: 1; }
+  .rail { grid-row: 2; border-right: 0; border-top: 1px solid var(--line); }
+  .rail-head { padding: 12px 16px 10px; gap: 10px; }
+  .legend { display: none; }
+  /* On phones the details card is a compact strip so most of the map stays visible. */
+  .card { left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; padding: 9px 12px 10px; }
+  .card h2 { font-size: 16px; }
+  .card .meta { font-size: 11.5px; }
+  .card dl { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 10px; margin-top: 8px; }
+  .card dt { font-size: 10.5px; }
+  .card dd { font-size: 12.5px; overflow-wrap: anywhere; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="rail" aria-label="Aircraft list">
+    <div class="rail-head">
+      <div class="title-row">
+        <div>
+          <p class="eyebrow">readsb / dump1090</p>
+          <h1>ADS-B Ground Station</h1>
+        </div>
+      </div>
+      <div class="where-row"><p class="where"><a class="back" href="/">Dashboard</a> · Live map · <a class="back" href="/settings">Settings</a></p>
+        <span class="pill" id="feed"><span class="dot"></span>Connecting</span></div>
+      <p id="statline" class="statline">&nbsp;</p>
+      <input id="q" class="search" type="search" placeholder="Search callsign, hex, type or squawk" aria-label="Search aircraft">
+      <div class="sort-row">
+        <span>Sort by</span>
+        <div class="seg" role="group" aria-label="Sort list">
+          <button id="sort-dist" aria-pressed="true" data-sort="dist">Distance</button>
+          <button id="sort-alt" aria-pressed="false" data-sort="alt">Altitude</button>
+          <button id="sort-cs" aria-pressed="false" data-sort="cs">Callsign</button>
+        </div>
+      </div>
+    </div>
+    <div id="list" class="list" role="list"></div>
+  </aside>
+
+  <main class="stage">
+    <div id="map"></div>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Map layers">
+        <button id="t-trails" aria-pressed="true">Trails</button>
+        <button id="t-labels" aria-pressed="true">Labels</button>
+        <button id="t-rings" aria-pressed="true">Range rings</button>
+      </div>
+      <div class="seg"><button id="t-center">Recenter</button></div>
+      <div class="seg theme" role="group" aria-label="Theme">
+        <button data-t="auto" aria-pressed="true">Auto</button><button data-t="light" aria-pressed="false">Light</button><button data-t="dark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="cap">Altitude, ft</div>
+      <div id="ramp" class="ramp"></div>
+      <div class="ticks"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k</span></div>
+      <p class="note" id="map-note">&nbsp;</p>
+    </div>
+    <div id="card" class="card" hidden></div>
+  </main>
+</div>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/topojson-client/topojson-client.min.js"></script>
+<script src="/static/map.js"></script>
+</body>
+</html>

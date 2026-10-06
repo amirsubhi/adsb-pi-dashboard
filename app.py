@@ -19,7 +19,7 @@ import configparser, json, math, os, re, shutil, sqlite3, subprocess, sys, threa
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ---------- settings ----------
 
@@ -48,6 +48,10 @@ SETTINGS = [
      "Altitude in feet above which altitudes are shown as flight levels. Malaysia 11000, UK 6000, USA 18000."),
     ("show_exact_location", "ADSB_SHOW_EXACT_LOCATION", False, bool,
      "Show the receiver's exact coordinates on the page. Off rounds them to about 1 km, so screenshots don't reveal your address."),
+    ("map_tiles", "ADSB_MAP_TILES", "osm", str,
+     "Street map under the live map: osm (OpenStreetMap, no key needed), carto (light and dark styles, needs carto_key) or off (bundled outline only, nothing loaded from the internet)."),
+    ("carto_key", "ADSB_CARTO_KEY", "", str,
+     "Free CARTO basemaps API key from carto.com/basemaps/apikey. Only used when map_tiles = carto."),
     ("cors_origin", "ADSB_CORS_ORIGIN", "", str,
      "One other website allowed to read this API, for example http://192.168.1.20:3000. Empty means none."),
 ]
@@ -104,6 +108,16 @@ def load_settings(path=None, environ=None):
     if (lat is None) != (lon is None) or (lat is not None and not (-90 <= lat <= 90 and -180 <= lon <= 180)):
         errors.append("receiver_lat / receiver_lon must both be set and in range; ignoring them")
         values["receiver_lat"] = values["receiver_lon"] = None
+    values["map_tiles"] = values["map_tiles"].lower()
+    if values["map_tiles"] not in TILE_PROVIDERS and values["map_tiles"] != "off":
+        errors.append("map_tiles must be osm, carto or off; using osm")
+        values["map_tiles"] = "osm"
+    if values["carto_key"] and not re.fullmatch(r"[A-Za-z0-9_.-]+", values["carto_key"]):
+        errors.append("carto_key contains characters an API key can't have; ignoring it")
+        values["carto_key"] = ""
+    if values["map_tiles"] == "carto" and not values["carto_key"]:
+        errors.append("map_tiles = carto needs carto_key (free from carto.com/basemaps/apikey); using osm until it is set")
+        values["map_tiles"] = "osm"
     return values, sources, errors
 
 def configure(path=None, environ=None):
@@ -115,13 +129,43 @@ def configure(path=None, environ=None):
 DB_PATH = os.path.join(DATA_DIR, "history.sqlite")
 HTML_PATH = os.path.join(DATA_DIR, "dashboard.html")
 SETTINGS_HTML_PATH = os.path.join(DATA_DIR, "settings.html")
-STATIC_DIR = os.path.join(DATA_DIR, "static")
-# The only files served besides the pages. A fixed list, so no request path
-# can reach anything else on the Pi.
+MAP_HTML_PATH = os.path.join(DATA_DIR, "map.html")
+# The only files served besides the pages: URL -> (path inside the data
+# folder, content type, cache for a day). A fixed list, so no request path can
+# reach anything else on the Pi. Vendored files never change within a
+# release, so browsers may cache them.
+JS, CSS, JSON_TYPE = "application/javascript", "text/css", "application/json"
 STATIC_FILES = {
-    "/static/theme.js": "application/javascript",
-    "/static/dashboard.js": "application/javascript",
-    "/static/settings.js": "application/javascript",
+    "/static/theme.js": ("static/theme.js", JS, False),
+    "/static/dashboard.js": ("static/dashboard.js", JS, False),
+    "/static/settings.js": ("static/settings.js", JS, False),
+    "/static/map.js": ("static/map.js", JS, False),
+    "/vendor/leaflet/leaflet.js": ("vendor/leaflet/leaflet.js", JS, True),
+    "/vendor/leaflet/leaflet.css": ("vendor/leaflet/leaflet.css", CSS, True),
+    "/vendor/topojson-client/topojson-client.min.js": ("vendor/topojson-client/topojson-client.min.js", JS, True),
+    "/geo/countries-50m.json": ("geo/countries-50m.json", JSON_TYPE, True),
+}
+
+# Online street maps for the live map. url takes {theme} = light or dark;
+# hosts are added to the CSP's img-src only for the provider in use.
+TILE_PROVIDERS = {
+    "osm": {
+        "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "subdomains": "",
+        "dark_filter": True,   # no dark style, so the page darkens it
+        "attribution": '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        "hosts": "https://tile.openstreetmap.org",
+        "max_zoom": 19,
+    },
+    "carto": {
+        "url": "https://{s}.basemaps.cartocdn.com/rastertiles/{theme}_all/{z}/{x}/{y}{r}.png?key={key}",
+        "subdomains": "abcd",
+        "dark_filter": False,
+        "attribution": '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors '
+                       '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+        "hosts": "https://*.basemaps.cartocdn.com",
+        "max_zoom": 20,
+    },
 }
 
 LAST = {"updated": 0}
@@ -591,6 +635,108 @@ def collector_loop():
                 LAST["error"] = str(e)
         time.sleep(CFG["poll_interval"])
 
+# ---------- live map: aircraft and trails ----------
+
+TRAIL_SECONDS = 300       # how much history each trail keeps
+TRAIL_SAMPLE_EVERY = 2    # seconds between trail samples
+TRAILS = {}               # hex -> list of [lat, lon, alt, ts]
+TRAILS_LOCK = threading.Lock()
+_AIRCRAFT_CACHE = {"key": None, "value": None}
+_CACHE_LOCK = threading.Lock()
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+def live_aircraft():
+    """The receiver's current aircraft with everything the map needs, read
+    fresh from aircraft.json (cached per file version, since several open
+    tabs poll this every second)."""
+    path = os.path.join(CFG["readsb_dir"], "aircraft.json")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {"now": time.time(), "aircraft": []}
+    with _CACHE_LOCK:
+        if _AIRCRAFT_CACHE["key"] == (path, mtime):
+            return _AIRCRAFT_CACHE["value"]
+    d = read_json(path) or {}
+    out = []
+    for a in d.get("aircraft", []):
+        if not a.get("hex"):
+            continue
+        pos_age = _num(a.get("seen_pos"))
+        has_pos = _num(a.get("lat")) is not None and _num(a.get("lon")) is not None and (pos_age or 0) <= POSITION_MAX_AGE
+        alt = a.get("alt_baro")
+        out.append({
+            "hex": a["hex"],
+            "flight": (a.get("flight") or "").strip() or None,
+            "reg": a.get("r"), "type": a.get("t"), "desc": a.get("desc"),
+            "lat": a["lat"] if has_pos else None,
+            "lon": a["lon"] if has_pos else None,
+            "seen_pos": pos_age if has_pos else None,
+            "seen": _num(a.get("seen")),
+            "alt": "ground" if alt == "ground" else _num(alt),
+            "gs": _num(a.get("gs")),
+            "track": _num(a.get("track")),
+            "vr": _num(a.get("baro_rate")) if _num(a.get("baro_rate")) is not None else _num(a.get("geom_rate")),
+            "squawk": a.get("squawk"),
+            "category": a.get("category"),
+            "rssi": _num(a.get("rssi")),
+        })
+    value = {"now": _num(d.get("now")) or time.time(), "aircraft": out}
+    with _CACHE_LOCK:
+        _AIRCRAFT_CACHE.update(key=(path, mtime), value=value)
+    return value
+
+def update_trails(trails, aircraft, now):
+    """Append each positioned aircraft's latest point, keep TRAIL_SECONDS of
+    history, and forget aircraft not seen for that long. Memory only: trails
+    are lost on restart, which spares the SD card a write every 2 seconds."""
+    for a in aircraft:
+        if a.get("lat") is None:
+            continue
+        pts = trails.setdefault(a["hex"], [])
+        point = [round(a["lat"], 5), round(a["lon"], 5), a["alt"] if isinstance(a["alt"], (int, float)) else 0, round(now, 1)]
+        if pts and pts[-1][0] == point[0] and pts[-1][1] == point[1]:
+            pts[-1][3] = point[3]   # hasn't moved; just refresh the time
+        else:
+            pts.append(point)
+    cutoff = now - TRAIL_SECONDS
+    for hx in list(trails):
+        pts = [p for p in trails[hx] if p[3] >= cutoff]
+        if pts:
+            trails[hx] = pts
+        else:
+            del trails[hx]
+
+def trail_loop():
+    while True:
+        try:
+            aircraft = live_aircraft()["aircraft"]
+            with TRAILS_LOCK:
+                update_trails(TRAILS, aircraft, time.time())
+        except Exception as e:
+            print("trail sampler: %r" % e, file=sys.stderr)
+        time.sleep(TRAIL_SAMPLE_EVERY)
+
+def map_config():
+    """What the live map needs once at load: where the receiver is, how to
+    show altitudes, and which street map (if any) to load."""
+    loc = receiver_location()
+    tiles = None
+    provider = TILE_PROVIDERS.get(CFG["map_tiles"])
+    if provider:
+        tiles = {k: provider[k] for k in ("url", "subdomains", "dark_filter", "attribution", "max_zoom")}
+        tiles["url"] = tiles["url"].replace("{key}", CFG["carto_key"])
+        tiles["provider"] = CFG["map_tiles"]
+    return {
+        "receiver": {"lat": loc[0], "lon": loc[1]} if loc else None,
+        "transition_alt": CFG["transition_alt"],
+        "show_exact_location": CFG["show_exact_location"],
+        "tiles": tiles,
+        "trail_seconds": TRAIL_SECONDS,
+    }
+
 # ---------- chart data ----------
 
 TYPICAL_BUCKETS = 96   # 15-minute slots across the day
@@ -708,6 +854,9 @@ def station_checks():
             "Can't read other services' logs, so MLAT stats stay empty. Add this user to the systemd-journal group."
             if denied else "Readable, so MLAT and under-voltage history are available")
 
+    names = {"osm": "OpenStreetMap street map", "carto": "CARTO street map", "off": "Off: bundled outline only, nothing loaded from the internet"}
+    add("Live map background", "info", names.get(CFG["map_tiles"], CFG["map_tiles"]))
+
     tz = _timezone()
     add("Time zone", "info", tz or "Unknown")
 
@@ -727,7 +876,10 @@ def settings_payload():
     rows = []
     for key, env, default, kind, desc in SETTINGS:
         rows.append({
-            "key": key, "env": env, "value": CFG[key], "default": default,
+            "key": key, "env": env, "default": default,
+            # The key is visible to anyone using the map anyway (it's in the tile
+            # URLs), but there's no need to print it on the settings page.
+            "value": ("set" if CFG[key] else "") if key == "carto_key" else CFG[key],
             "source": CFG_SOURCE[key], "type": kind.__name__, "description": desc,
         })
     return {
@@ -743,10 +895,14 @@ def settings_payload():
 
 # ---------- HTTP server ----------
 
-# Scripts only from this server's /static files. Styles stay 'unsafe-inline'
-# because the pages carry their CSS inline and set a few style attributes.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+def csp():
+    """Scripts only from this server. Styles stay 'unsafe-inline' because the
+    pages carry their CSS inline and set a few style attributes. Images may
+    also come from the one tile provider in use, if any."""
+    provider = TILE_PROVIDERS.get(CFG["map_tiles"])
+    img = "'self' data:" + (" " + provider["hosts"] if provider else "")
+    return ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src %s; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" % img)
 
 class BadRequest(Exception):
     pass
@@ -784,7 +940,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("Content-Security-Policy", csp())
         if CFG["cors_origin"]:
             self.send_header("Access-Control-Allow-Origin", CFG["cors_origin"])
             self.send_header("Vary", "Origin")
@@ -813,16 +969,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _static(self, path, ctype):
+    def _static(self, entry):
+        rel, ctype, cacheable = entry
         try:
-            with open(os.path.join(STATIC_DIR, os.path.basename(path)), "rb") as f:
+            with open(os.path.join(DATA_DIR, rel), "rb") as f:
                 body = f.read()
         except OSError:
             return self._json({"error": "not found"}, 404)
         self.send_response(200)
         self.send_header("Content-Type", ctype + "; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "max-age=86400" if cacheable else "no-cache")
         self._common_headers()
         self.end_headers()
         self.wfile.write(body)
@@ -843,8 +1000,10 @@ class Handler(BaseHTTPRequestHandler):
             self._page(HTML_PATH)
         elif parsed.path == "/settings":
             self._page(SETTINGS_HTML_PATH)
+        elif parsed.path == "/map":
+            self._page(MAP_HTML_PATH)
         elif parsed.path in STATIC_FILES:
-            self._static(parsed.path, STATIC_FILES[parsed.path])
+            self._static(STATIC_FILES[parsed.path])
         elif parsed.path == "/favicon.ico":
             self.send_response(204)
             self._common_headers()
@@ -855,6 +1014,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(snapshot)
         elif parsed.path == "/api/settings":
             self._json(settings_payload())
+        elif parsed.path == "/api/aircraft":
+            self._json(live_aircraft())
+        elif parsed.path == "/api/trails":
+            with TRAILS_LOCK:
+                trails = {hx: list(pts) for hx, pts in TRAILS.items()}
+            self._json(trails)
+        elif parsed.path == "/api/map-config":
+            self._json(map_config())
         elif parsed.path == "/api/history":
             cutoff = time.time() - hours_param(qs, "24") * 3600
             conn = get_conn()
@@ -912,6 +1079,7 @@ def main():
     init_db()
     collect_once()
     threading.Thread(target=collector_loop, daemon=True).start()
+    threading.Thread(target=trail_loop, daemon=True).start()
     server = ThreadingHTTPServer((CFG["bind"], CFG["port"]), Handler)
     print("adsb-dashboard %s listening on %s:%d, data dir %s" % (VERSION, CFG["bind"], CFG["port"], DATA_DIR))
     server.serve_forever()

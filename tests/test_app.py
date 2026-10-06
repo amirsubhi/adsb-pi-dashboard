@@ -18,12 +18,13 @@ class TempDataDir(unittest.TestCase):
     """Points app at an empty data folder and the readsb fixtures."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.saved = (app.DATA_DIR, app.DB_PATH, app.SETTINGS_PATH, app.HTML_PATH, app.SETTINGS_HTML_PATH)
+        self.saved = (app.DATA_DIR, app.DB_PATH, app.SETTINGS_PATH, app.HTML_PATH, app.SETTINGS_HTML_PATH, app.MAP_HTML_PATH)
         app.DATA_DIR = self.tmp
         app.DB_PATH = os.path.join(self.tmp, "history.sqlite")
         app.SETTINGS_PATH = os.path.join(self.tmp, "settings.ini")
         app.HTML_PATH = os.path.join(self.tmp, "dashboard.html")
         app.SETTINGS_HTML_PATH = os.path.join(self.tmp, "settings.html")
+        app.MAP_HTML_PATH = os.path.join(self.tmp, "map.html")
         self.configure()
 
     def configure(self, ini="", env=None):
@@ -34,7 +35,7 @@ class TempDataDir(unittest.TestCase):
         app.configure(app.SETTINGS_PATH, environ)
 
     def tearDown(self):
-        app.DATA_DIR, app.DB_PATH, app.SETTINGS_PATH, app.HTML_PATH, app.SETTINGS_HTML_PATH = self.saved
+        app.DATA_DIR, app.DB_PATH, app.SETTINGS_PATH, app.HTML_PATH, app.SETTINGS_HTML_PATH, app.MAP_HTML_PATH = self.saved
         shutil.rmtree(self.tmp)
 
 # ---------- settings ----------
@@ -324,6 +325,84 @@ class DailyStatsTest(TempDataDir):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0], 1)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM daily").fetchone()[0], 1)
 
+# ---------- live map ----------
+
+class MapSettingsTest(TempDataDir):
+    def test_default_is_openstreetmap(self):
+        self.assertEqual(app.CFG["map_tiles"], "osm")
+        self.assertEqual(app.map_config()["tiles"]["provider"], "osm")
+
+    def test_carto_with_key(self):
+        self.configure("[dashboard]\nmap_tiles = CARTO\ncarto_key = Ab-12_x\n")
+        tiles = app.map_config()["tiles"]
+        self.assertEqual(tiles["provider"], "carto")
+        self.assertTrue(tiles["url"].endswith("?key=Ab-12_x"))
+        self.assertIn("{theme}_all", tiles["url"])
+        self.assertIn("CARTO", tiles["attribution"])
+
+    def test_carto_without_key_falls_back_to_osm(self):
+        self.configure("[dashboard]\nmap_tiles = carto\n")
+        self.assertEqual(app.CFG["map_tiles"], "osm")
+        self.assertIn("carto_key", app.CFG_ERRORS[0])
+
+    def test_key_with_odd_characters_rejected(self):
+        self.configure("[dashboard]\nmap_tiles = carto\ncarto_key = abc\"><script>\n")
+        self.assertEqual(app.CFG["carto_key"], "")
+        self.assertEqual(app.CFG["map_tiles"], "osm")
+
+    def test_unknown_provider(self):
+        self.configure("[dashboard]\nmap_tiles = google\n")
+        self.assertEqual(app.CFG["map_tiles"], "osm")
+        self.assertTrue(app.CFG_ERRORS)
+
+    def test_off_means_no_tiles(self):
+        self.configure("[dashboard]\nmap_tiles = off\n")
+        self.assertIsNone(app.map_config()["tiles"])
+
+class LiveAircraftTest(TempDataDir):
+    def write(self, aircraft, now=1000.0):
+        folder = os.path.join(self.tmp, "rb")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "aircraft.json")
+        with open(path, "w") as f:
+            json.dump({"now": now, "aircraft": aircraft}, f)
+        os.utime(path, (now, now))
+        self.configure(env={"ADSB_READSB_DIR": folder})
+
+    def test_fields(self):
+        self.write([{"hex": "750606", "flight": "MAS1  ", "r": "9M-MAG", "t": "A359", "lat": 3.0, "lon": 101.5, "seen_pos": 1.2,
+                     "alt_baro": "ground", "gs": 12.5, "track": 90, "geom_rate": -64, "squawk": "7700", "rssi": -9.5},
+                    {"hex": "75aaaa", "lat": 3.0, "lon": 101.5, "seen_pos": 200, "alt_baro": 30000, "baro_rate": 128},
+                    {"flight": "NOHEX"}])
+        a, b = app.live_aircraft()["aircraft"]
+        self.assertEqual((a["flight"], a["reg"], a["type"], a["alt"], a["vr"], a["squawk"]), ("MAS1", "9M-MAG", "A359", "ground", -64, "7700"))
+        self.assertEqual((a["lat"], a["lon"]), (3.0, 101.5))
+        self.assertIsNone(b["lat"])   # position too old to plot
+        self.assertEqual((b["alt"], b["vr"]), (30000, 128))
+
+    def test_missing_file(self):
+        self.configure(env={"ADSB_READSB_DIR": os.path.join(self.tmp, "nowhere")})
+        self.assertEqual(app.live_aircraft()["aircraft"], [])
+
+    def test_cache_follows_file_changes(self):
+        self.write([{"hex": "a"}], now=1000)
+        self.assertEqual(len(app.live_aircraft()["aircraft"]), 1)
+        self.write([{"hex": "a"}, {"hex": "b"}], now=1001)
+        self.assertEqual(len(app.live_aircraft()["aircraft"]), 2)
+
+class TrailsTest(unittest.TestCase):
+    def test_trails_grow_skip_duplicates_and_expire(self):
+        trails = {}
+        a = {"hex": "a", "lat": 1.0, "lon": 2.0, "alt": 1000}
+        app.update_trails(trails, [a, {"hex": "nopos", "lat": None}], 100)
+        app.update_trails(trails, [a], 102)                          # hasn't moved
+        app.update_trails(trails, [dict(a, lat=1.01, alt="ground")], 104)
+        self.assertEqual(trails, {"a": [[1.0, 2.0, 1000, 102], [1.01, 2.0, 0, 104]]})
+        app.update_trails(trails, [], 104 + app.TRAIL_SECONDS - 1)   # first point now too old
+        self.assertEqual(trails, {"a": [[1.01, 2.0, 0, 104]]})
+        app.update_trails(trails, [], 104 + app.TRAIL_SECONDS + 1)   # gone for 5 minutes
+        self.assertEqual(trails, {})
+
 # ---------- query validation ----------
 
 class StepParamTest(unittest.TestCase):
@@ -350,18 +429,16 @@ class HoursParamTest(TempDataDir):
 class HttpTest(TempDataDir):
     def setUp(self):
         super().setUp()
-        for name in ("dashboard.html", "settings.html"):
+        for name in ("dashboard.html", "settings.html", "map.html"):
             shutil.copy(os.path.join(ROOT, name), self.tmp)
-        shutil.copytree(os.path.join(ROOT, "static"), os.path.join(self.tmp, "static"))
-        self.saved_static = app.STATIC_DIR
-        app.STATIC_DIR = os.path.join(self.tmp, "static")
+        for folder in ("static", "vendor", "geo"):
+            shutil.copytree(os.path.join(ROOT, folder), os.path.join(self.tmp, folder))
         app.init_db()
         app.collect_once()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def tearDown(self):
-        app.STATIC_DIR = self.saved_static
         self.server.shutdown()
         self.server.server_close()
         super().tearDown()
@@ -379,7 +456,11 @@ class HttpTest(TempDataDir):
                              ("/api/history?hours=2", 200), ("/api/metrics", 200), ("/api/metrics?hours=24&step=300", 200),
                              ("/api/metrics?step=1", 400), ("/api/typical", 200), ("/api/coverage", 200),
                              ("/static/dashboard.js", 200), ("/static/theme.js", 200), ("/static/settings.js", 200),
-                             ("/static/../app.py", 404), ("/static/app.py", 404), ("/nope", 404), ("/../app.py", 404)]:
+                             ("/static/../app.py", 404), ("/static/app.py", 404), ("/nope", 404), ("/../app.py", 404),
+                             ("/map", 200), ("/api/aircraft", 200), ("/api/trails", 200), ("/api/map-config", 200),
+                             ("/static/map.js", 200), ("/vendor/leaflet/leaflet.js", 200), ("/vendor/leaflet/leaflet.css", 200),
+                             ("/vendor/topojson-client/topojson-client.min.js", 200), ("/geo/countries-50m.json", 200),
+                             ("/vendor/leaflet/LICENSE", 404), ("/geo/../app.py", 404)]:
             self.assertEqual(self.get(path)[0], status, path)
 
     def test_status_contents(self):
@@ -411,9 +492,38 @@ class HttpTest(TempDataDir):
         _, h, _ = self.get("/")
         self.assertIn("script-src 'self';", h["content-security-policy"])
         self.assertNotIn("script-src 'self' 'unsafe-inline'", h["content-security-policy"])
-        for page in ("dashboard.html", "settings.html"):
+        for page in ("dashboard.html", "settings.html", "map.html"):
             with open(os.path.join(ROOT, page)) as f:
-                self.assertNotIn("<script>", f.read(), page)  # inline scripts would be blocked by the CSP
+                html = f.read()
+            self.assertNotIn("<script>", html, page)  # inline scripts would be blocked by the CSP
+            self.assertNotRegex(html, r"\son[a-z]+=", page)  # so would inline event handlers
+
+    def test_vendored_files_are_cacheable_and_pages_are_not(self):
+        _, h, _ = self.get("/vendor/leaflet/leaflet.js")
+        self.assertEqual(h["cache-control"], "max-age=86400")
+        self.assertTrue(h["content-type"].startswith("application/javascript"))
+        self.assertEqual(self.get("/geo/countries-50m.json")[1]["content-type"], "application/json; charset=utf-8")
+        self.assertEqual(self.get("/static/map.js")[1]["cache-control"], "no-cache")
+
+    def test_tile_host_allowed_only_for_the_provider_in_use(self):
+        self.assertIn("img-src 'self' data: https://tile.openstreetmap.org;", self.get("/map")[1]["content-security-policy"])
+        self.configure("[dashboard]\nmap_tiles = off\n")
+        self.assertIn("img-src 'self' data:;", self.get("/map")[1]["content-security-policy"])
+        self.configure("[dashboard]\nmap_tiles = carto\ncarto_key = abc123\n")
+        self.assertIn("https://*.basemaps.cartocdn.com", self.get("/map")[1]["content-security-policy"])
+
+    def test_map_endpoints(self):
+        d = json.loads(self.get("/api/aircraft")[2])
+        self.assertEqual(len(d["aircraft"]), 3)
+        cfg = json.loads(self.get("/api/map-config")[2])
+        self.assertEqual(cfg["receiver"], {"lat": 2.7456, "lon": 101.7099})
+        self.assertEqual(cfg["tiles"]["provider"], "osm")
+
+    def test_carto_key_not_printed_on_settings_page(self):
+        self.configure("[dashboard]\nmap_tiles = carto\ncarto_key = abc123\n")
+        rows = {s["key"]: s["value"] for s in json.loads(self.get("/api/settings")[2])["settings"]}
+        self.assertEqual(rows["carto_key"], "set")
+        self.assertEqual(rows["map_tiles"], "carto")
 
     def test_security_headers(self):
         _, h, _ = self.get("/")

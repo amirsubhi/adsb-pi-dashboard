@@ -14,6 +14,7 @@ import argparse, json, math, os, random, time
 
 NM = 1852.0
 CALLSIGNS = ["MAS", "AXM", "MXD", "FFM", "SIA", "UAE", "QTR", "CPA", "GIA", "AIQ", "THY", "KLM"]
+TYPES = ["A320", "A20N", "A321", "A333", "A359", "B738", "B38M", "B77W", "B789", "AT76", "A388"]
 
 def destination(lat, lon, bearing, metres):
     r, d, b = 6371000.0, metres / 6371000.0, math.radians(bearing)
@@ -33,6 +34,9 @@ def new_aircraft(home, at_edge=False):
         "gs": random.uniform(220, 260) if alt < 10000 else random.uniform(380, 500),
         "alt_baro": alt, "baro_rate": random.choice([0, 0, -1280, 1600]),
         "squawk": "%04o" % random.randint(0o1000, 0o6777),
+        # readsb adds registration and type when it runs with an aircraft database
+        "r": "9M-" + "".join(random.choice("ABCDEFGHJKLMNPRSTUVWXYZ") for _ in range(3)) if random.random() < 0.7 else None,
+        "t": random.choice(TYPES) if random.random() < 0.7 else None,
         "category": random.choice(["A3", "A3", "A5", "A2"]),
     }
 
