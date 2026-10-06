@@ -18,6 +18,25 @@ overhead. This pulls it into one page and adds that history.
 
 ## What it shows
 
+The **live map** (`/map`) shows every aircraft your receiver hears, moving
+smoothly between updates:
+
+- Plane icons point along each aircraft's track and are coloured by altitude,
+  with a 5-minute trail behind them.
+- A list you can search (callsign, hex, registration, type, squawk) and sort
+  by distance, altitude or callsign.
+- Click a plane or row for its details: altitude (as a flight level above your
+  transition altitude), climb or descent rate, ground speed, track, distance
+  and bearing from your receiver, squawk and signal strength.
+- Emergency squawks (7500, 7600, 7700) are pinned to the top and drawn in red.
+- Range rings at 50, 100, 150 and 200 nm, and a "Live" indicator that warns
+  when data stops arriving.
+- Street maps from OpenStreetMap (or CARTO, with a free key) when the Pi has
+  internet. Underneath, a bundled coastline outline means the map still works
+  offline.
+
+The **dashboard** (`/`) shows:
+
 - **Alerts, only when something is wrong.** When all is well the page says
   so in one quiet line. Under-voltage, throttling, a hot CPU or a feeder going
   down appear at the top as red **WARNING** or amber **CAUTION** strips, worst
@@ -131,6 +150,8 @@ would need a login to be safe on a network, and this dashboard has none.
 | `receiver_lat`, `receiver_lon` | `ADSB_LAT`, `ADSB_LON` | not set | Receiver position, if readsb doesn't report it |
 | `transition_alt` | `ADSB_TRANSITION_ALT` | `18000` | Feet above which altitudes show as flight levels (Malaysia 11000, UK 6000) |
 | `show_exact_location` | `ADSB_SHOW_EXACT_LOCATION` | `no` | Show exact receiver coordinates instead of rounding to ~1 km |
+| `map_tiles` | `ADSB_MAP_TILES` | `osm` | Live map background: `osm`, `carto` (needs `carto_key`) or `off` |
+| `carto_key` | `ADSB_CARTO_KEY` | not set | Free [CARTO basemaps key](https://carto.com/basemaps/apikey), for `map_tiles = carto` |
 | `cors_origin` | `ADSB_CORS_ORIGIN` | not set | One other website allowed to read the API |
 
 An environment variable overrides `settings.ini`. If you configured an
@@ -155,6 +176,10 @@ The dashboard is built for a home network:
   everything shown on a page is escaped.
 - The systemd service runs as your user with a read-only view of the system
   (it can only write to its data folder) and no way to gain privileges.
+- The live map's street tiles come from OpenStreetMap or CARTO, which see your
+  IP address and the area you're viewing. `map_tiles = off` keeps everything on
+  your network. Leaflet and the coastline data are bundled, so no scripts are
+  ever loaded from another site.
 
 ## API
 
@@ -174,6 +199,14 @@ things on top of it:
   and best of the past 7 days.
 - `GET /api/settings` — settings in effect and the station checks shown on
   the Settings page.
+- `GET /api/aircraft` — the live aircraft list from `aircraft.json` with
+  position, altitude (`"ground"` on the ground), speed, track, vertical rate,
+  squawk, signal, and registration and type when readsb has an aircraft
+  database. Positions older than 60 s are left out.
+- `GET /api/trails` — the last 5 minutes of positions per aircraft, as
+  `[lat, lon, altitude, time]`. Kept in memory only.
+- `GET /api/map-config` — receiver position, transition altitude and the
+  street-map provider, for the map page.
 
 All responses are JSON. An invalid `hours` value returns `400` with an
 `error` message.
@@ -206,6 +239,19 @@ row. So a single aircraft passing through twice in a day shows as two
 separate history entries, not one. Everything is kept in a single SQLite
 file (`history.sqlite`) with no external database required.
 
+## Credits
+
+The live map is built with [Leaflet](https://leafletjs.com). Its offline
+outline is [Natural Earth](https://www.naturalearthdata.com) data via
+[world-atlas](https://github.com/topojson/world-atlas) and
+[topojson-client](https://github.com/topojson/topojson-client), all bundled
+in the repo. Street maps are © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+contributors (and © [CARTO](https://carto.com/attributions) when you use CARTO's).
+The dashboard is made to sit alongside [readsb](https://github.com/wiedehopf/readsb)
+and borrows ideas from tar1090 and graphs1090. Licences and checksums for
+everything bundled are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Bundled third-party files keep their own
+licences, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
