@@ -4,91 +4,176 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ADS-B Ground Station</title>
+<script src="/static/theme.js"></script>
 <style>
+  /* Layout: header + annunciator, then a performance band (hero figure + readouts), two charts side by side,
+     Pi/receiver lists, feeders, history. Quiet when normal; colour only for state ("dark cockpit"). */
   :root{
-    --page:#f3f5f8; --surface:#ffffff; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#8893a1;
-    --line:#dfe3e9; --accent:#2a78d6; --accent-soft:#e7f0fb;
-    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --page:#f3f5f8; --surface:#ffffff; --surface-2:#eef1f5; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#7a8594;
+    --line:#dfe3e9; --line-strong:#c5ccd6; --grid:#e8ecf1; --accent:#2a78d6; --accent-soft:#e7f0fb; --band:rgba(78,90,104,.12);
+    --good:#0a8f0a; --warning:#b98100; --warning-soft:#fdf4dc; --critical:#d03b3b; --critical-soft:#fbe9e9;
     --font-body:-apple-system,"Segoe UI",system-ui,sans-serif;
     --font-data:ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
     color-scheme: light;
   }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --page:#0a0e13; --surface:#121922; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6b7786;
-      --line:#232e3b; --accent:#5b9bec; --accent-soft:#182536;
-      --critical:#e2615f;
-      color-scheme: dark;
-    }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --page:#0a0e13; --surface:#121922; --surface-2:#18212c; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
+    --line:#232e3b; --line-strong:#34465a; --grid:#1c2631; --accent:#5b9bec; --accent-soft:#182536; --band:rgba(159,171,186,.13);
+    --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
+    color-scheme: dark;
+  } }
+  :root[data-theme="dark"]{
+    --page:#0a0e13; --surface:#121922; --surface-2:#18212c; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
+    --line:#232e3b; --line-strong:#34465a; --grid:#1c2631; --accent:#5b9bec; --accent-soft:#182536; --band:rgba(159,171,186,.13);
+    --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
+    color-scheme: dark;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;}
-  body{background:var(--page);color:var(--ink);font-family:var(--font-body);
-    padding:20px 16px 48px;max-width:980px;margin-inline:auto;}
-  h1,h2,h3{font-family:var(--font-data);margin:0;}
+  body{background:var(--page);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.4;
+    padding:20px 16px 40px;max-width:1040px;margin-inline:auto;}
+  h1,h2,h3,p{margin:0;}
+  a{color:var(--accent);}
   .mono{font-family:var(--font-data);font-variant-numeric:tabular-nums;}
-  .eyebrow{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;font-family:var(--font-data);}
-  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;
-    border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:22px;}
-  header h1{font-size:1.5rem;font-weight:600;}
-  .snapshot-meta{font-size:.82rem;color:var(--ink-mute);text-align:right;}
-  .pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-data);font-size:.78rem;
-    font-weight:500;padding:5px 11px 5px 9px;border-radius:99px;border:1px solid var(--line);white-space:nowrap;}
-  .pill .dot{width:8px;height:8px;border-radius:50%;flex:none;}
-  .pill.good{color:var(--good);} .pill.good .dot{background:var(--good);}
-  .pill.serious{color:var(--serious);} .pill.serious .dot{background:var(--serious);}
-  .pill.warning{color:var(--warning);} .pill.warning .dot{background:var(--warning);}
-  .pill.critical{color:var(--critical);} .pill.critical .dot{background:var(--critical);}
-  .pill.mute{color:var(--ink-mute);} .pill.mute .dot{background:var(--ink-mute);}
-  section{margin-bottom:28px;}
+  small{font-size:.78em;color:var(--ink-mute);font-weight:400;}
+
+  /* ---------- header ---------- */
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;padding-bottom:16px;border-bottom:1px solid var(--line);}
+  .eyebrow{font-family:var(--font-data);font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:6px;}
+  header h1{font-family:var(--font-data);font-size:1.5rem;font-weight:600;}
+  .where{margin-top:6px;font-size:.86rem;color:var(--ink-soft);}
+  .where a{text-decoration:none;} .where a:hover{text-decoration:underline;}
+  .head-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+  .updated{font-size:.8rem;color:var(--ink-mute);display:flex;align-items:center;gap:6px;}
+  .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good);}
+  .updated.stale{color:var(--warning);} .updated.stale::before{background:var(--ink-mute);}
+  @media (max-width:680px){ .head-right{align-items:flex-start;} }
+
+  .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:7px;overflow:hidden;background:var(--surface);}
+  .seg button{background:transparent;border:0;border-left:1px solid var(--line);color:var(--ink-soft);font:500 12px var(--font-body);padding:5px 10px;cursor:pointer;}
+  .seg button:first-child{border-left:0;}
+  .seg button:hover{background:var(--surface-2);color:var(--ink);}
+  .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);}
+  button:focus-visible, select:focus-visible, a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  /* ---------- annunciator: absent when all is well ---------- */
+  .annunciator{display:grid;gap:6px;margin-top:14px;}
+  .ann{display:flex;align-items:baseline;gap:10px;padding:9px 12px;border-radius:7px;border:1px solid;font-size:.9rem;}
+  .ann b{font-family:var(--font-data);font-size:.72rem;letter-spacing:.08em;flex:none;}
+  .ann.critical{background:var(--critical-soft);border-color:var(--critical);} .ann.critical b{color:var(--critical);}
+  .ann.warning{background:var(--warning-soft);border-color:var(--warning);} .ann.warning b{color:var(--warning);}
+  .ann span{color:var(--ink);}
+  .allclear{margin-top:12px;font-size:.86rem;color:var(--ink-mute);}
+
+  /* ---------- performance band ---------- */
+  .perf{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr);gap:24px 40px;align-items:end;padding:26px 0 22px;border-bottom:1px solid var(--line);}
+  .hero .label{color:var(--ink-soft);font-size:.9rem;}
+  .hero .fig{font-size:3.6rem;font-weight:600;letter-spacing:-.02em;line-height:1;margin:6px 0 8px;}
+  .hero .ctx{color:var(--ink-soft);font-size:.86rem;}
+  .hero .ctx .typ{font-variant-numeric:tabular-nums;}
+  .readouts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));}
+  .readout{padding:0 0 2px 18px;border-left:1px solid var(--line);min-width:0;}
+  .readout .label{color:var(--ink-soft);font-size:.82rem;}
+  .readout .val{font-size:1.6rem;font-weight:600;margin-top:4px;letter-spacing:-.01em;}
+  .readout .sub{color:var(--ink-mute);font-size:.8rem;margin-top:2px;}
+  .overhead{grid-column:1 / -1;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 20px;
+    font-size:.88rem;color:var(--ink-soft);}
+  .overhead b{font-family:var(--font-data);color:var(--ink);font-weight:600;}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;font-size:.86rem;padding:7px 14px;border-radius:7px;white-space:nowrap;}
+  .btn:hover{filter:brightness(1.08);}
+  @media (max-width:760px){ .perf{grid-template-columns:1fr;} .readouts{grid-template-columns:repeat(3,minmax(0,1fr));} .readout{padding-left:12px;} .readout .val{font-size:1.3rem;} }
+
+  /* ---------- sections ---------- */
+  section{margin-top:30px;}
   .section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
-  .section-head h2{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-mute);font-weight:500;}
-  .section-head .note{font-size:.78rem;color:var(--ink-mute);}
-  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
-  @media (max-width:640px){.grid{grid-template-columns:repeat(2,1fr);}}
-  .tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 14px;min-width:0;}
-  .tile .label{font-size:.72rem;color:var(--ink-mute);margin-bottom:6px;}
-  .tile .value{font-family:var(--font-data);font-size:1.3rem;font-weight:500;line-height:1.1;}
-  .tile .value small{font-size:.65rem;color:var(--ink-mute);font-weight:400;margin-left:3px;}
-  .tile.flag-serious{border-color:color-mix(in srgb, var(--serious) 45%, var(--line));background:color-mix(in srgb, var(--serious) 7%, var(--surface));}
-  .tile.flag-warning{border-color:color-mix(in srgb, var(--warning) 45%, var(--line));background:color-mix(in srgb, var(--warning) 7%, var(--surface));}
-  .tile .flagline{font-size:.72rem;margin-top:5px;font-weight:500;}
-  .tile.flag-serious .flagline{color:var(--serious);} .tile.flag-warning .flagline{color:var(--warning);}
-  .feeders{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  @media (max-width:640px){.feeders{grid-template-columns:1fr;}}
-  .feeder{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0;}
+  .section-head h2{font-size:1rem;font-weight:600;}
+  .section-head .note{font-size:.8rem;color:var(--ink-mute);}
+  .charts{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:28px 40px;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px 40px;}
+  @media (max-width:760px){ .charts, .cols{grid-template-columns:1fr;} }
+
+  /* ---------- charts (SVG, coloured by tokens so themes switch for free) ---------- */
+  .chart{position:relative;min-width:0;}
+  .chart svg{display:block;width:100%;height:auto;overflow:visible;}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.8rem;color:var(--ink-soft);margin-bottom:8px;}
+  .key{display:inline-flex;align-items:center;gap:6px;}
+  .key i{display:inline-block;}
+  .key .k-line{width:16px;height:2px;background:var(--accent);border-radius:1px;}
+  .key .k-band{width:16px;height:10px;background:var(--band);border-radius:2px;}
+  .key .k-out{width:16px;height:0;border-top:1.5px solid var(--ink-mute);}
+  .key .k-fill{width:12px;height:12px;background:color-mix(in srgb,var(--accent) 14%,transparent);border:2px solid var(--accent);border-radius:3px;}
+  .g-grid{stroke:var(--grid);stroke-width:1;}
+  .g-base{stroke:var(--line-strong);stroke-width:1;}
+  .g-tick{fill:var(--ink-mute);font:11px var(--font-body);font-variant-numeric:tabular-nums;}
+  .g-band{fill:var(--band);}
+  .g-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;}
+  .g-area{fill:var(--accent);opacity:.1;}
+  .g-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2;}
+  .g-cross{stroke:var(--ink-mute);stroke-width:1;}
+  .g-out{fill:none;stroke:var(--ink-mute);stroke-width:1.5;stroke-linejoin:round;}
+  .g-cov{fill:var(--accent);fill-opacity:.12;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;}
+  .g-ring{fill:none;stroke:var(--grid);stroke-width:1;}
+  .g-spoke{stroke:var(--grid);stroke-width:1;}
+  .g-card{fill:var(--ink-soft);font:600 11px var(--font-data);}
+  .g-home{fill:var(--surface);stroke:var(--accent);stroke-width:2;}
+  .g-hit{fill:transparent;cursor:crosshair;}
+  .g-sector{fill:var(--ink);opacity:.06;}
+  .tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 9px;
+    font-size:.8rem;box-shadow:0 4px 14px rgba(0,0,0,.12);white-space:nowrap;z-index:5;}
+  .tip b{font-family:var(--font-data);}
+  .tip .t{color:var(--ink-mute);margin-bottom:2px;}
+  .chart .cap{font-size:.8rem;color:var(--ink-mute);margin-top:8px;}
+
+  /* ---------- name / value lists ---------- */
+  .group-title{font-size:.86rem;font-weight:600;color:var(--ink-soft);margin-bottom:6px;}
+  .kv{margin:0;}
+  .kv > div{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .kv > div:first-child{border-top:1px solid var(--line);}
+  .kv dt{color:var(--ink-soft);}
+  .kv dd{margin:0;font-family:var(--font-data);font-weight:500;text-align:right;font-variant-numeric:tabular-nums;}
+  .kv .spark{width:84px;height:22px;display:block;}
+  .kv .spark .s-line{fill:none;stroke:var(--ink-mute);stroke-width:1.5;stroke-linejoin:round;}
+  .kv .spark .s-end{fill:var(--accent);stroke:var(--surface);stroke-width:1.5;}
+  .flag{font-family:var(--font-body);font-size:.78rem;font-weight:600;margin-right:8px;}
+  .flag.warning{color:var(--warning);} .flag.critical{color:var(--critical);}
+
+  /* ---------- feeders ---------- */
+  .feeders{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}
+  @media (max-width:760px){ .feeders{grid-template-columns:1fr;} }
+  .feeder{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px 6px;min-width:0;}
+  .feeder.down{border-color:var(--critical);}
   .feeder.disabled{opacity:.55;}
-  .feeder-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:3px;}
-  .feeder-head h3{font-size:1rem;font-weight:600;}
-  .feeder-id{font-size:.78rem;color:var(--ink-mute);margin-bottom:14px;}
-  .kv-list{display:flex;flex-direction:column;gap:9px;}
-  .kv-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:.86rem;}
-  .kv-row .k{color:var(--ink-soft);}
-  .kv-row .v{font-family:var(--font-data);font-weight:500;text-align:right;}
-  .kv-row .v small{color:var(--ink-mute);font-weight:400;}
-  .sub-divider{border-top:1px solid var(--line);margin:12px 0;padding-top:12px;}
-  .caption{font-size:.74rem;color:var(--ink-mute);margin-top:10px;line-height:1.5;}
+  .feeder-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
+  .feeder-head h3{font-family:var(--font-data);font-size:1rem;font-weight:600;}
+  .state{font-size:.82rem;color:var(--ink-mute);display:inline-flex;align-items:center;gap:6px;}
+  .state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good);}
+  .state.down{color:var(--critical);font-weight:600;} .state.down::before{background:var(--critical);}
+  .state.off::before{background:var(--ink-mute);}
+  .feeder-id{font-size:.8rem;color:var(--ink-mute);margin:3px 0 10px;}
+  .feeder .kv > div{grid-template-columns:minmax(0,1fr) auto;}
+  .feeder .kv > div:last-child{border-bottom:0;}
+
+  /* ---------- history ---------- */
   .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);}
-  table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:460px;}
-  th{text-align:left;font-family:var(--font-data);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--ink-mute);font-weight:500;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
-  td{padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:600px;}
+  th{text-align:left;font-size:.8rem;color:var(--ink-mute);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  td{padding:9px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody tr:hover{background:var(--surface-2);}
   tr:last-child td{border-bottom:none;}
+  th.num, td.num{text-align:right;}
+  td.num{font-family:var(--font-data);font-variant-numeric:tabular-nums;}
   td.flight{font-family:var(--font-data);font-weight:600;}
-  td.num{font-family:var(--font-data);text-align:right;font-variant-numeric:tabular-nums;}
-  .empty{padding:26px 16px;text-align:center;color:var(--ink-mute);font-size:.86rem;}
-  select{font-family:var(--font-body);font-size:.82rem;background:var(--surface);color:var(--ink);
-    border:1px solid var(--line);border-radius:7px;padding:5px 9px;}
-  .sparkrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  @media (max-width:640px){.sparkrow{grid-template-columns:1fr;}}
-  .spark-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 14px;}
-  .spark-card .label{font-size:.72rem;color:var(--ink-mute);margin-bottom:4px;}
-  .spark-card .range{font-size:.72rem;color:var(--ink-mute);margin-top:4px;}
-  canvas{display:block;width:100%;height:46px;}
-  footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:.78rem;color:var(--ink-mute);line-height:1.6;}
-  .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--good);margin-right:5px;
-    animation:pulse 2s ease-in-out infinite;}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  td.flight .hex{font-weight:400;color:var(--ink-mute);margin-left:8px;}
+  td .altbar{display:inline-block;vertical-align:middle;height:4px;border-radius:2px;background:var(--line-strong);margin-right:10px;}
+  .inrange{display:inline-flex;align-items:center;gap:6px;color:var(--good);font-weight:500;}
+  .inrange::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;}
+  .empty{padding:24px 16px;text-align:center;color:var(--ink-mute);}
+  select{font-family:var(--font-body);font-size:.82rem;background:var(--surface);color:var(--ink);border:1px solid var(--line-strong);border-radius:7px;padding:5px 9px;}
+  .caption{font-size:.8rem;color:var(--ink-mute);margin-top:10px;}
+
+  footer{margin-top:28px;padding-top:14px;border-top:1px solid var(--line);font-size:.8rem;color:var(--ink-mute);line-height:1.6;}
+  footer button{font:inherit;color:var(--accent);background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;}
+  @media (prefers-reduced-motion: reduce){ *{transition:none!important;} }
 </style>
 </head>
 <body>
@@ -97,285 +182,99 @@
   <div>
     <p class="eyebrow">readsb / dump1090</p>
     <h1>ADS-B Ground Station</h1>
+    <p class="where">Dashboard · <a href="/settings">Settings</a></p>
   </div>
-  <div class="snapshot-meta">
-    <span id="status-pill" class="pill mute"><span class="dot"></span>Loading&hellip;</span>
-    <div style="margin-top:7px;"><span class="live-dot"></span>Updated <span id="updated-ts" class="mono">&mdash;</span></div>
+  <div class="head-right">
+    <div class="seg theme" role="group" aria-label="Theme">
+      <button data-t="auto" aria-pressed="true">Auto</button><button data-t="light" aria-pressed="false">Light</button><button data-t="dark" aria-pressed="false">Dark</button>
+    </div>
+    <div id="updated" class="updated">Waiting for first update</div>
   </div>
 </header>
+<div id="annunciator" class="annunciator" aria-live="polite"></div>
+
+<div class="perf">
+  <div class="hero">
+    <div class="label">Aircraft in range</div>
+    <div class="fig" id="hero-fig">—</div>
+    <div class="ctx" id="hero-ctx">&nbsp;</div>
+  </div>
+  <div class="readouts">
+    <div class="readout"><div class="label">Messages</div><div class="val" id="ro-msg">—</div><div class="sub">per second</div></div>
+    <div class="readout"><div class="label">Furthest today</div><div class="val" id="ro-range">—</div><div class="sub" id="ro-range-sub">&nbsp;</div></div>
+    <div class="readout"><div class="label">Seen today</div><div class="val" id="ro-unique">—</div><div class="sub">unique aircraft</div></div>
+  </div>
+  <div class="overhead">
+    <span id="overhead-text">&nbsp;</span>
+  </div>
+</div>
 
 <section>
-  <div class="section-head"><h2>System vitals</h2><span class="note" id="host-note">&nbsp;</span></div>
-  <div class="grid" id="vitals-grid"></div>
-</section>
-
-<section>
-  <div class="section-head"><h2>Trends</h2><span class="note">last 6 hours</span></div>
-  <div class="sparkrow">
-    <div class="spark-card">
-      <div class="label">CPU temperature</div>
-      <canvas id="spark-temp"></canvas>
-      <div class="range" id="spark-temp-range">collecting data&hellip;</div>
+  <div class="charts">
+    <div>
+      <div class="section-head"><h2>Traffic, last 24 hours</h2></div>
+      <div class="legend"><span class="key"><i class="k-line"></i>Aircraft in range</span><span class="key" id="band-key"><i class="k-band"></i>Usual range, past 7 days</span></div>
+      <div class="chart" id="traffic"></div>
     </div>
-    <div class="spark-card">
-      <div class="label">Aircraft in range</div>
-      <canvas id="spark-aircraft"></canvas>
-      <div class="range" id="spark-aircraft-range">collecting data&hellip;</div>
+    <div>
+      <div class="section-head"><h2>Coverage</h2></div>
+      <div class="legend"><span class="key"><i class="k-fill"></i>Today</span><span class="key"><i class="k-out"></i>Best, past 7 days</span></div>
+      <div class="chart" id="coverage"></div>
+      <p class="caption">Furthest position heard in each 10° direction.</p>
     </div>
   </div>
 </section>
 
 <section>
-  <div class="section-head"><h2>Feeders</h2><span class="note">&nbsp;</span></div>
+  <div class="cols">
+    <div><h2 class="group-title">This Pi</h2><dl class="kv" id="pi-list"></dl></div>
+    <div><h2 class="group-title">Receiver</h2><dl class="kv" id="rx-list"></dl></div>
+  </div>
+</section>
+
+<section>
+  <div class="section-head"><h2>Feeders</h2></div>
   <div class="feeders">
     <div class="feeder" id="fr24-card">
-      <div class="feeder-head"><h3>FlightRadar24</h3><span id="fr24-pill" class="pill mute"><span class="dot"></span>&hellip;</span></div>
-      <div class="feeder-id" id="fr24-id">&nbsp;</div>
-      <div class="kv-list">
-        <div class="kv-row"><span class="k">Aircraft tracked</span><span class="v" id="fr24-ac">&mdash;</span></div>
-        <div class="kv-row"><span class="k">Messages relayed</span><span class="v" id="fr24-msgs">&mdash;</span></div>
-        <div class="kv-row"><span class="k">MLAT sync count</span><span class="v" id="fr24-sync">&mdash;</span></div>
-      </div>
-      <p class="caption">fr24feed decoder process and its link to FlightRadar24's ingest server.</p>
+      <div class="feeder-head"><h3>FlightRadar24</h3><span id="fr24-state" class="state off">Checking</span></div>
+      <div class="feeder-id" id="fr24-id">fr24feed</div>
+      <dl class="kv">
+        <div><dt>Aircraft tracked</dt><dd id="fr24-ac">—</dd></div>
+        <div><dt>Messages relayed</dt><dd id="fr24-msgs">—</dd></div>
+        <div><dt>MLAT sync count</dt><dd id="fr24-sync">—</dd></div>
+      </dl>
     </div>
     <div class="feeder" id="adsbx-card">
-      <div class="feeder-head"><h3>ADSBExchange</h3><span id="adsbx-pill" class="pill mute"><span class="dot"></span>&hellip;</span></div>
-      <div class="feeder-id">readsb client &middot; feed + MLAT</div>
-      <div class="kv-list">
-        <div class="kv-row"><span class="k">Aircraft with position</span><span class="v" id="adsbx-ac">&mdash;</span></div>
-        <div class="kv-row"><span class="k">Valid messages, last 1 min</span><span class="v" id="adsbx-msgs">&mdash;</span></div>
-      </div>
-      <div class="sub-divider">
-        <div class="kv-list">
-          <div class="kv-row"><span class="k">MLAT peers</span><span class="v" id="mlat-peers">&mdash;</span></div>
-          <div class="kv-row"><span class="k">MLAT msg rate</span><span class="v" id="mlat-rate">&mdash;</span></div>
-          <div class="kv-row"><span class="k">Position reports</span><span class="v" id="mlat-pos">&mdash;</span></div>
-        </div>
-      </div>
-      <p class="caption">MLAT multilaterates aircraft without their own ADS-B position by timing the same signal across nearby receivers.</p>
+      <div class="feeder-head"><h3>ADSBExchange</h3><span id="adsbx-state" class="state off">Checking</span></div>
+      <div class="feeder-id">adsbexchange-feed · adsbexchange-mlat</div>
+      <dl class="kv">
+        <div><dt>Aircraft with position</dt><dd id="adsbx-ac">—</dd></div>
+        <div><dt>MLAT peers</dt><dd id="mlat-peers">—</dd></div>
+        <div><dt>MLAT messages</dt><dd id="mlat-rate">—</dd></div>
+        <div><dt>MLAT positions</dt><dd id="mlat-pos">—</dd></div>
+      </dl>
     </div>
   </div>
-</section>
-
-<section>
-  <div class="section-head"><h2>Aircraft in range</h2><span class="note" id="aircraft-count-note">&nbsp;</span></div>
-  <div class="tbl-wrap" id="aircraft-wrap"></div>
 </section>
 
 <section>
   <div class="section-head">
     <h2>Flight history</h2>
-    <select id="history-range">
+    <select id="history-range" aria-label="History window">
       <option value="2">Last 2 hours</option>
       <option value="24" selected>Last 24 hours</option>
       <option value="168">Last 7 days</option>
     </select>
   </div>
-  <div class="tbl-wrap" id="history-wrap"></div>
-  <p class="caption" style="margin-top:10px;">A sighting starts when an aircraft's signal is first picked up and ends once it's absent for 5 minutes &mdash; the same aircraft passing twice counts as two entries.</p>
+  <div class="tbl-wrap" id="history-wrap"><div class="empty">Loading history</div></div>
+  <p class="caption">A sighting ends after 5 minutes without a signal, so an aircraft that passes twice is listed twice.</p>
 </section>
 
-<footer>
-  Live from this receiver, polled every 15 seconds. Flight history is logged locally in SQLite and kept 30 days.<br>
-  <span id="footer-location"></span> <a href="/settings" style="color:inherit;">Settings and station checks</a>
+<footer id="footer">
+  Polled every 15 seconds. History is stored on this Pi.<span id="footer-location"></span> <a href="/settings" style="color:inherit">Settings and station checks</a>
 </footer>
 
-<script>
-const fmtTime = s => new Date(s*1000).toLocaleString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-const fmtDate = s => new Date(s*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-const fmtDur = sec => {
-  sec = Math.max(0, Math.round(sec));
-  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
-  if (h) return `${h}h ${m}m`;
-  if (m) return `${m}m ${s}s`;
-  return `${s}s`;
-};
+<script src="/static/dashboard.js"></script>
 
-// Everything that came from the receiver or another program is escaped
-// before it goes into innerHTML.
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-function pill(el, state, text){
-  el.className = 'pill ' + state;
-  el.innerHTML = `<span class="dot"></span>${text}`;
-}
-
-let locationShown = false;
-
-async function refreshStatus(){
-  let d;
-  try { d = await (await fetch('/api/status')).json(); } catch(e){ return; }
-  if (!d || !d.updated) return;
-
-  document.getElementById('updated-ts').textContent = fmtTime(d.updated);
-
-  if (!locationShown && d.receiver && d.receiver.lat != null){
-    document.getElementById('footer-location').textContent =
-      // Rounded to ~1 km unless show_exact_location is on, so screenshots don't give away an address.
-      (d.station && d.station.show_exact_location)
-        ? `Receiver at ${d.receiver.lat.toFixed(4)}°, ${d.receiver.lon.toFixed(4)}°.`
-        : `Receiver near ${d.receiver.lat.toFixed(2)}°, ${d.receiver.lon.toFixed(2)}°.`;
-    locationShown = true;
-  }
-
-  // overall status pill
-  const t = d.throttled || {};
-  let overall = ['good','All systems normal'];
-  if (t.undervoltage_now || t.throttled_now) overall = ['critical','Needs attention now'];
-  else if ((d.temp_c||0) >= 75 || t.undervoltage_occurred) overall = ['serious','Needs attention'];
-  else if ((d.temp_c||0) >= 70) overall = ['warning','Running warm'];
-  pill(document.getElementById('status-pill'), overall[0], overall[1]);
-
-  // vitals grid
-  const up = d.uptime_s||0;
-  const upD = Math.floor(up/86400), upH = Math.floor((up%86400)/3600);
-  const memFree = d.mem && d.mem.available_mb ? (d.mem.available_mb/1024).toFixed(1) : '—';
-  const diskUsed = d.disk ? d.disk.used_gb : '—';
-  const diskTotal = d.disk ? d.disk.total_gb : '—';
-  const tempFlag = (d.temp_c||0) >= 75 ? 'flag-serious' : (d.temp_c||0) >= 70 ? 'flag-warning' : '';
-  const powerFlag = t.undervoltage_now ? 'flag-serious' : t.undervoltage_occurred ? 'flag-warning' : '';
-  const powerLabel = t.undervoltage_now ? 'Undervoltage now' : t.undervoltage_occurred ? 'Occurred this boot' : 'Stable';
-
-  document.getElementById('vitals-grid').innerHTML = `
-    <div class="tile ${tempFlag}"><div class="label">CPU temperature</div>
-      <div class="value">${d.temp_c!=null?d.temp_c.toFixed(0):'—'}<small>&deg;C</small></div>
-      ${tempFlag?`<div class="flagline">${(d.temp_c||0)>=75?'Running hot':'Running warm'}</div>`:''}</div>
-    <div class="tile ${powerFlag}"><div class="label">Power</div>
-      <div class="value" style="font-size:1rem;">${powerLabel}</div>
-      ${d.undervoltage_last_event?`<div class="flagline" style="color:var(--ink-mute);font-weight:400;">last: ${esc(d.undervoltage_last_event)}</div>`:''}</div>
-    <div class="tile"><div class="label">Uptime</div><div class="value">${upD}<small>d</small> ${upH}<small>h</small></div></div>
-    <div class="tile"><div class="label">Load average</div><div class="value">${(d.load&&d.load.l1!=null)?d.load.l1.toFixed(2):'—'}<small>1m</small></div></div>
-    <div class="tile"><div class="label">Memory free</div><div class="value">${memFree}<small>GB</small></div></div>
-    <div class="tile"><div class="label">SD card used</div><div class="value">${diskUsed}<small>/${diskTotal}GB</small></div></div>
-    <div class="tile"><div class="label">Receiver gain</div><div class="value">${d.receiver&&d.receiver.gain_db!=null?d.receiver.gain_db:'—'}<small>dB</small></div></div>
-    <div class="tile"><div class="label">Clock drift</div><div class="value">${d.receiver&&d.receiver.estimated_ppm!=null?d.receiver.estimated_ppm.toFixed(1):'—'}<small>ppm</small></div></div>
-  `;
-
-  // FR24 (optional install)
-  const fr = d.fr24 || {};
-  const fr24Card = document.getElementById('fr24-card');
-  if (!fr.running){
-    fr24Card.classList.add('disabled');
-    pill(document.getElementById('fr24-pill'), 'mute', 'Not installed');
-    document.getElementById('fr24-id').textContent = 'fr24feed not detected on this host';
-  } else {
-    fr24Card.classList.remove('disabled');
-    pill(document.getElementById('fr24-pill'), fr.receiver_status==='connected'?'good':'critical', fr.receiver_status==='connected'?'Connected':'Disconnected');
-    document.getElementById('fr24-id').textContent = `Radar ID ${fr.radar_id||'—'} · ${fr.link_type||'—'} link`;
-    document.getElementById('fr24-ac').textContent = fr.tracked_ac ?? '—';
-    document.getElementById('fr24-msgs').textContent = fr.msgs!=null ? fr.msgs.toLocaleString() : '—';
-    document.getElementById('fr24-sync').textContent = fr.sync ?? '—';
-  }
-
-  // ADSBExchange (optional install)
-  const adsbxCard = document.getElementById('adsbx-card');
-  if (d.adsbx_feed_active === 'unknown'){
-    adsbxCard.classList.add('disabled');
-    pill(document.getElementById('adsbx-pill'), 'mute', 'Not installed');
-  } else {
-    adsbxCard.classList.remove('disabled');
-    const adsbxOk = d.adsbx_feed_active === 'active';
-    pill(document.getElementById('adsbx-pill'), adsbxOk?'good':'critical', adsbxOk?'Connected':'Down');
-    document.getElementById('adsbx-ac').textContent = (d.adsbx_status&&d.adsbx_status.aircraft_with_pos) ?? '—';
-    document.getElementById('adsbx-msgs').textContent = (d.receiver&&d.receiver.messages_valid_1min!=null) ? d.receiver.messages_valid_1min.toLocaleString() : '—';
-    const ml = d.mlat || {};
-    document.getElementById('mlat-peers').textContent = ml.peer_count ?? '—';
-    document.getElementById('mlat-rate').innerHTML = ml.msg_rate_received!=null ? `${ml.msg_rate_received} <small>/s</small>` : '—';
-    document.getElementById('mlat-pos').innerHTML = ml.positions_per_min!=null ? `${ml.positions_per_min} <small>/min</small>` : '—';
-  }
-
-  // aircraft table
-  const ac = d.aircraft || [];
-  document.getElementById('aircraft-count-note').textContent = `${ac.length} aircraft`;
-  const wrap = document.getElementById('aircraft-wrap');
-  if (!ac.length){
-    wrap.innerHTML = `<div class="empty">No aircraft in range right now &mdash; traffic volume rises and falls through the day.</div>`;
-  } else {
-    wrap.innerHTML = `<table><thead><tr><th>Flight</th><th style="text-align:right;">Hex</th><th style="text-align:right;">Altitude</th><th style="text-align:right;">Ground spd</th></tr></thead><tbody>
-      ${ac.map(a=>`<tr><td class="flight">${a.flight ? esc(a.flight) : '<span style=\"color:var(--ink-mute);font-weight:400;\">—</span>'}</td><td class="num mono">${esc(a.hex)}</td>
-        <td class="num">${a.alt_baro!=null?a.alt_baro.toLocaleString()+' ft':'—'}</td>
-        <td class="num">${a.gs!=null?Math.round(a.gs)+' kt':'—'}</td></tr>`).join('')}
-    </tbody></table>`;
-  }
-}
-
-function drawSpark(canvas, points){
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = w*dpr; canvas.height = h*dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr,dpr);
-  ctx.clearRect(0,0,w,h);
-  if (!points.length) return;
-  const vals = points.map(p=>p[1]);
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const span = (max-min) || 1;
-  const x = i => (i/(points.length-1||1)) * (w-4) + 2;
-  const y = v => h-4 - ((v-min)/span) * (h-8);
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2a78d6';
-
-  ctx.beginPath();
-  points.forEach((p,i)=>{ const px=x(i), py=y(p[1]); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
-  ctx.lineTo(x(points.length-1), h-2); ctx.lineTo(x(0), h-2); ctx.closePath();
-  ctx.fillStyle = accent + '22';
-  ctx.fill();
-
-  ctx.beginPath();
-  points.forEach((p,i)=>{ const px=x(i), py=y(p[1]); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
-  ctx.lineWidth = 2; ctx.lineCap='round'; ctx.strokeStyle = accent;
-  ctx.stroke();
-
-  const lastX = x(points.length-1), lastY = y(points[points.length-1][1]);
-  ctx.beginPath(); ctx.arc(lastX,lastY,3,0,7); ctx.fillStyle = accent; ctx.fill();
-}
-
-async function refreshMetrics(){
-  let d;
-  try { d = await (await fetch('/api/metrics?hours=6')).json(); } catch(e){ return; }
-  const tempPts = d.filter(r=>r.temp_c!=null).map(r=>[r.ts, r.temp_c]);
-  const acPts = d.map(r=>[r.ts, r.aircraft_count||0]);
-  const tc = document.getElementById('spark-temp');
-  const ac = document.getElementById('spark-aircraft');
-  if (tempPts.length>1){
-    drawSpark(tc, tempPts);
-    const vals = tempPts.map(p=>p[1]);
-    document.getElementById('spark-temp-range').textContent = `${Math.min(...vals).toFixed(0)}–${Math.max(...vals).toFixed(0)}°C over ${((tempPts[tempPts.length-1][0]-tempPts[0][0])/3600).toFixed(1)}h`;
-  }
-  if (acPts.length>1){
-    drawSpark(ac, acPts);
-    const vals = acPts.map(p=>p[1]);
-    document.getElementById('spark-aircraft-range').textContent = `${Math.min(...vals)}–${Math.max(...vals)} aircraft`;
-  }
-}
-
-async function refreshHistory(){
-  const hours = document.getElementById('history-range').value;
-  let rows;
-  try { rows = await (await fetch('/api/history?hours='+hours)).json(); } catch(e){ return; }
-  const wrap = document.getElementById('history-wrap');
-  if (!rows.length){
-    wrap.innerHTML = `<div class="empty">No flights logged yet in this window &mdash; the history log fills in as aircraft pass overhead.</div>`;
-    return;
-  }
-  const nowSec = Date.now()/1000;
-  wrap.innerHTML = `<table><thead><tr><th>Flight / hex</th><th>First seen</th><th>Last seen</th><th style="text-align:right;">Duration</th><th style="text-align:right;">Max alt</th><th style="text-align:right;">Max spd</th></tr></thead><tbody>
-    ${rows.map(r=>{
-      const inRange = (nowSec - r.last_seen) < 60;
-      return `<tr><td class="flight">${r.flight ? esc(r.flight) : `<span class="mono" style="font-weight:400;color:var(--ink-mute);">${esc(r.hex)}</span>`}</td>
-      <td>${fmtDate(r.first_seen)}</td>
-      <td>${inRange?'<span class="pill good" style="padding:2px 8px;"><span class="dot"></span>In range</span>':fmtDate(r.last_seen)}</td>
-      <td class="num">${fmtDur(r.last_seen-r.first_seen)}</td>
-      <td class="num">${r.max_alt!=null?r.max_alt.toLocaleString()+' ft':'—'}</td>
-      <td class="num">${r.max_gs!=null?Math.round(r.max_gs)+' kt':'—'}</td></tr>`;
-    }).join('')}
-  </tbody></table>`;
-}
-
-document.getElementById('history-range').addEventListener('change', refreshHistory);
-refreshStatus(); refreshMetrics(); refreshHistory();
-setInterval(refreshStatus, 12000);
-setInterval(refreshMetrics, 60000);
-setInterval(refreshHistory, 60000);
-</script>
 </body>
 </html>

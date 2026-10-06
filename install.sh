@@ -27,6 +27,8 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/app.py" "$REPO_DIR/dashboard.html" "$REPO_DIR/settings.html" "$REPO_DIR/settings.example.ini" "$INSTALL_DIR/"
+mkdir -p "$INSTALL_DIR/static"
+cp "$REPO_DIR"/static/*.js "$INSTALL_DIR/static/"
 
 # First install: create settings.ini from the example and, when run
 # interactively, ask for the two values most people need to set.
