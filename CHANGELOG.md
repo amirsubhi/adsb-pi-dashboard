@@ -7,11 +7,11 @@ upgraded in place.
 ## 1.5.0: Which airline, and what a flight level means
 
 - Flight codes now show the airline when it's recognised (e.g. "AirAsia"
-  next to "AXM220"), on the dashboard's history table and overhead line and
-  on the live map's list, card and search. Covers the carriers this
-  project's own feeders see plus other widely-flown airlines
-  (`static/airlines.js`); an unrecognised prefix still shows just the
-  callsign, as before.
+  next to "AXM220", "Qantas" next to "QFA7"), on the dashboard's history
+  table and overhead line and on the live map's list, card and search.
+  Covers the carriers this project's own feeders see plus over 100 other
+  major and widely-flown airlines worldwide (`static/airlines.js`); an
+  unrecognised prefix still shows just the callsign, as before.
 - Flight levels (`FL350`) now also spell out the altitude in feet where
   there's room (history table, live map's detail card), and as a hover
   tooltip in the live map's compact list, since "FL350" means nothing if you
