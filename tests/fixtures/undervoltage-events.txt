@@ -1,0 +1,2 @@
+2026-10-01T03:12:44+0800 adsb kernel: hwmon hwmon1: Undervoltage detected!
+2026-10-05T21:40:09+0800 adsb kernel: hwmon hwmon1: Undervoltage detected!

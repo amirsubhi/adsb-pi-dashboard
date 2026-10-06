@@ -3,3 +3,6 @@ __pycache__/
 *.sqlite
 *.sqlite-journal
 .DS_Store
+*.sqlite-wal
+*.sqlite-shm
+settings.ini

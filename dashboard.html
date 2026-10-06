@@ -177,7 +177,7 @@
 
 <footer>
   Live from this receiver, polled every 15 seconds. Flight history is logged locally in SQLite and kept 30 days.<br>
-  <span id="footer-location"></span>
+  <span id="footer-location"></span> <a href="/settings" style="color:inherit;">Settings and station checks</a>
 </footer>
 
 <script>
@@ -190,6 +190,10 @@ const fmtDur = sec => {
   if (m) return `${m}m ${s}s`;
   return `${s}s`;
 };
+
+// Everything that came from the receiver or another program is escaped
+// before it goes into innerHTML.
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function pill(el, state, text){
   el.className = 'pill ' + state;
@@ -207,7 +211,10 @@ async function refreshStatus(){
 
   if (!locationShown && d.receiver && d.receiver.lat != null){
     document.getElementById('footer-location').textContent =
-      `Receiver at ${d.receiver.lat.toFixed(4)}°, ${d.receiver.lon.toFixed(4)}°.`;
+      // Rounded to ~1 km unless show_exact_location is on, so screenshots don't give away an address.
+      (d.station && d.station.show_exact_location)
+        ? `Receiver at ${d.receiver.lat.toFixed(4)}°, ${d.receiver.lon.toFixed(4)}°.`
+        : `Receiver near ${d.receiver.lat.toFixed(2)}°, ${d.receiver.lon.toFixed(2)}°.`;
     locationShown = true;
   }
 
@@ -235,7 +242,7 @@ async function refreshStatus(){
       ${tempFlag?`<div class="flagline">${(d.temp_c||0)>=75?'Running hot':'Running warm'}</div>`:''}</div>
     <div class="tile ${powerFlag}"><div class="label">Power</div>
       <div class="value" style="font-size:1rem;">${powerLabel}</div>
-      ${d.undervoltage_last_event?`<div class="flagline" style="color:var(--ink-mute);font-weight:400;">last: ${d.undervoltage_last_event}</div>`:''}</div>
+      ${d.undervoltage_last_event?`<div class="flagline" style="color:var(--ink-mute);font-weight:400;">last: ${esc(d.undervoltage_last_event)}</div>`:''}</div>
     <div class="tile"><div class="label">Uptime</div><div class="value">${upD}<small>d</small> ${upH}<small>h</small></div></div>
     <div class="tile"><div class="label">Load average</div><div class="value">${(d.load&&d.load.l1!=null)?d.load.l1.toFixed(2):'—'}<small>1m</small></div></div>
     <div class="tile"><div class="label">Memory free</div><div class="value">${memFree}<small>GB</small></div></div>
@@ -270,7 +277,7 @@ async function refreshStatus(){
     const adsbxOk = d.adsbx_feed_active === 'active';
     pill(document.getElementById('adsbx-pill'), adsbxOk?'good':'critical', adsbxOk?'Connected':'Down');
     document.getElementById('adsbx-ac').textContent = (d.adsbx_status&&d.adsbx_status.aircraft_with_pos) ?? '—';
-    document.getElementById('adsbx-msgs').textContent = (d.receiver&&d.receiver.messages_valid_1min) ?? '—';
+    document.getElementById('adsbx-msgs').textContent = (d.receiver&&d.receiver.messages_valid_1min!=null) ? d.receiver.messages_valid_1min.toLocaleString() : '—';
     const ml = d.mlat || {};
     document.getElementById('mlat-peers').textContent = ml.peer_count ?? '—';
     document.getElementById('mlat-rate').innerHTML = ml.msg_rate_received!=null ? `${ml.msg_rate_received} <small>/s</small>` : '—';
@@ -284,8 +291,8 @@ async function refreshStatus(){
   if (!ac.length){
     wrap.innerHTML = `<div class="empty">No aircraft in range right now &mdash; traffic volume rises and falls through the day.</div>`;
   } else {
-    wrap.innerHTML = `<table><thead><tr><th>Flight</th><th>Hex</th><th style="text-align:right;">Altitude</th><th style="text-align:right;">Ground spd</th></tr></thead><tbody>
-      ${ac.map(a=>`<tr><td class="flight">${a.flight||'<span style=\"color:var(--ink-mute);font-weight:400;\">—</span>'}</td><td class="num mono">${a.hex}</td>
+    wrap.innerHTML = `<table><thead><tr><th>Flight</th><th style="text-align:right;">Hex</th><th style="text-align:right;">Altitude</th><th style="text-align:right;">Ground spd</th></tr></thead><tbody>
+      ${ac.map(a=>`<tr><td class="flight">${a.flight ? esc(a.flight) : '<span style=\"color:var(--ink-mute);font-weight:400;\">—</span>'}</td><td class="num mono">${esc(a.hex)}</td>
         <td class="num">${a.alt_baro!=null?a.alt_baro.toLocaleString()+' ft':'—'}</td>
         <td class="num">${a.gs!=null?Math.round(a.gs)+' kt':'—'}</td></tr>`).join('')}
     </tbody></table>`;
@@ -354,7 +361,7 @@ async function refreshHistory(){
   wrap.innerHTML = `<table><thead><tr><th>Flight / hex</th><th>First seen</th><th>Last seen</th><th style="text-align:right;">Duration</th><th style="text-align:right;">Max alt</th><th style="text-align:right;">Max spd</th></tr></thead><tbody>
     ${rows.map(r=>{
       const inRange = (nowSec - r.last_seen) < 60;
-      return `<tr><td class="flight">${r.flight || `<span class="mono" style="font-weight:400;color:var(--ink-mute);">${r.hex}</span>`}</td>
+      return `<tr><td class="flight">${r.flight ? esc(r.flight) : `<span class="mono" style="font-weight:400;color:var(--ink-mute);">${esc(r.hex)}</span>`}</td>
       <td>${fmtDate(r.first_seen)}</td>
       <td>${inRange?'<span class="pill good" style="padding:2px 8px;"><span class="dot"></span>In range</span>':fmtDate(r.last_seen)}</td>
       <td class="num">${fmtDur(r.last_seen-r.first_seen)}</td>

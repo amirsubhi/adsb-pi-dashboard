@@ -1,0 +1,5 @@
+{"now": 1791274000.0, "messages": 48231907, "aircraft": [
+  {"hex": "750606", "flight": "MAS2668 ", "alt_baro": 16825, "gs": 440.1, "track": 128.0, "lat": 3.9, "lon": 100.8},
+  {"hex": "75aec8", "flight": "AXM712  ", "alt_baro": "ground", "gs": 12.0, "track": 270.0},
+  {"hex": "7c6b2d", "alt_baro": 37000, "gs": 480.0, "track": 310.5}
+]}

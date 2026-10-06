@@ -5,10 +5,24 @@ After=network.target
 [Service]
 Type=simple
 User=__USER__
+SupplementaryGroups=__GROUPS__
+Environment=__ENVIRONMENT__
 WorkingDirectory=__INSTALL_DIR__
 ExecStart=__PYTHON__ __INSTALL_DIR__/app.py
 Restart=on-failure
 RestartSec=5
+
+# Sandboxing: the dashboard only reads system status and writes to its own
+# data folder, so everything else is read-only and privilege changes are off.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=__INSTALL_DIR__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target
