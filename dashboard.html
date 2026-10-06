@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Ground Station</title>
+<style>
+  :root{
+    --page:#f3f5f8; --surface:#ffffff; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#8893a1;
+    --line:#dfe3e9; --accent:#2a78d6; --accent-soft:#e7f0fb;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --font-body:-apple-system,"Segoe UI",system-ui,sans-serif;
+    --font-data:ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --page:#0a0e13; --surface:#121922; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6b7786;
+      --line:#232e3b; --accent:#5b9bec; --accent-soft:#182536;
+      --critical:#e2615f;
+      color-scheme: dark;
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:var(--page);color:var(--ink);font-family:var(--font-body);
+    padding:20px 16px 48px;max-width:980px;margin-inline:auto;}
+  h1,h2,h3{font-family:var(--font-data);margin:0;}
+  .mono{font-family:var(--font-data);font-variant-numeric:tabular-nums;}
+  .eyebrow{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;font-family:var(--font-data);}
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;
+    border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:22px;}
+  header h1{font-size:1.5rem;font-weight:600;}
+  .snapshot-meta{font-size:.82rem;color:var(--ink-mute);text-align:right;}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-data);font-size:.78rem;
+    font-weight:500;padding:5px 11px 5px 9px;border-radius:99px;border:1px solid var(--line);white-space:nowrap;}
+  .pill .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .pill.good{color:var(--good);} .pill.good .dot{background:var(--good);}
+  .pill.serious{color:var(--serious);} .pill.serious .dot{background:var(--serious);}
+  .pill.warning{color:var(--warning);} .pill.warning .dot{background:var(--warning);}
+  .pill.critical{color:var(--critical);} .pill.critical .dot{background:var(--critical);}
+  .pill.mute{color:var(--ink-mute);} .pill.mute .dot{background:var(--ink-mute);}
+  section{margin-bottom:28px;}
+  .section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .section-head h2{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-mute);font-weight:500;}
+  .section-head .note{font-size:.78rem;color:var(--ink-mute);}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  @media (max-width:640px){.grid{grid-template-columns:repeat(2,1fr);}}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 14px;min-width:0;}
+  .tile .label{font-size:.72rem;color:var(--ink-mute);margin-bottom:6px;}
+  .tile .value{font-family:var(--font-data);font-size:1.3rem;font-weight:500;line-height:1.1;}
+  .tile .value small{font-size:.65rem;color:var(--ink-mute);font-weight:400;margin-left:3px;}
+  .tile.flag-serious{border-color:color-mix(in srgb, var(--serious) 45%, var(--line));background:color-mix(in srgb, var(--serious) 7%, var(--surface));}
+  .tile.flag-warning{border-color:color-mix(in srgb, var(--warning) 45%, var(--line));background:color-mix(in srgb, var(--warning) 7%, var(--surface));}
+  .tile .flagline{font-size:.72rem;margin-top:5px;font-weight:500;}
+  .tile.flag-serious .flagline{color:var(--serious);} .tile.flag-warning .flagline{color:var(--warning);}
+  .feeders{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:640px){.feeders{grid-template-columns:1fr;}}
+  .feeder{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0;}
+  .feeder.disabled{opacity:.55;}
+  .feeder-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:3px;}
+  .feeder-head h3{font-size:1rem;font-weight:600;}
+  .feeder-id{font-size:.78rem;color:var(--ink-mute);margin-bottom:14px;}
+  .kv-list{display:flex;flex-direction:column;gap:9px;}
+  .kv-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:.86rem;}
+  .kv-row .k{color:var(--ink-soft);}
+  .kv-row .v{font-family:var(--font-data);font-weight:500;text-align:right;}
+  .kv-row .v small{color:var(--ink-mute);font-weight:400;}
+  .sub-divider{border-top:1px solid var(--line);margin:12px 0;padding-top:12px;}
+  .caption{font-size:.74rem;color:var(--ink-mute);margin-top:10px;line-height:1.5;}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);}
+  table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:460px;}
+  th{text-align:left;font-family:var(--font-data);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--ink-mute);font-weight:500;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  td{padding:12px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tr:last-child td{border-bottom:none;}
+  td.flight{font-family:var(--font-data);font-weight:600;}
+  td.num{font-family:var(--font-data);text-align:right;font-variant-numeric:tabular-nums;}
+  .empty{padding:26px 16px;text-align:center;color:var(--ink-mute);font-size:.86rem;}
+  select{font-family:var(--font-body);font-size:.82rem;background:var(--surface);color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:5px 9px;}
+  .sparkrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:640px){.sparkrow{grid-template-columns:1fr;}}
+  .spark-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 14px;}
+  .spark-card .label{font-size:.72rem;color:var(--ink-mute);margin-bottom:4px;}
+  .spark-card .range{font-size:.72rem;color:var(--ink-mute);margin-top:4px;}
+  canvas{display:block;width:100%;height:46px;}
+  footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:.78rem;color:var(--ink-mute);line-height:1.6;}
+  .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--good);margin-right:5px;
+    animation:pulse 2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <p class="eyebrow">readsb / dump1090</p>
+    <h1>ADS-B Ground Station</h1>
+  </div>
+  <div class="snapshot-meta">
+    <span id="status-pill" class="pill mute"><span class="dot"></span>Loading&hellip;</span>
+    <div style="margin-top:7px;"><span class="live-dot"></span>Updated <span id="updated-ts" class="mono">&mdash;</span></div>
+  </div>
+</header>
+
+<section>
+  <div class="section-head"><h2>System vitals</h2><span class="note" id="host-note">&nbsp;</span></div>
+  <div class="grid" id="vitals-grid"></div>
+</section>
+
+<section>
+  <div class="section-head"><h2>Trends</h2><span class="note">last 6 hours</span></div>
+  <div class="sparkrow">
+    <div class="spark-card">
+      <div class="label">CPU temperature</div>
+      <canvas id="spark-temp"></canvas>
+      <div class="range" id="spark-temp-range">collecting data&hellip;</div>
+    </div>
+    <div class="spark-card">
+      <div class="label">Aircraft in range</div>
+      <canvas id="spark-aircraft"></canvas>
+      <div class="range" id="spark-aircraft-range">collecting data&hellip;</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="section-head"><h2>Feeders</h2><span class="note">&nbsp;</span></div>
+  <div class="feeders">
+    <div class="feeder" id="fr24-card">
+      <div class="feeder-head"><h3>FlightRadar24</h3><span id="fr24-pill" class="pill mute"><span class="dot"></span>&hellip;</span></div>
+      <div class="feeder-id" id="fr24-id">&nbsp;</div>
+      <div class="kv-list">
+        <div class="kv-row"><span class="k">Aircraft tracked</span><span class="v" id="fr24-ac">&mdash;</span></div>
+        <div class="kv-row"><span class="k">Messages relayed</span><span class="v" id="fr24-msgs">&mdash;</span></div>
+        <div class="kv-row"><span class="k">MLAT sync count</span><span class="v" id="fr24-sync">&mdash;</span></div>
+      </div>
+      <p class="caption">fr24feed decoder process and its link to FlightRadar24's ingest server.</p>
+    </div>
+    <div class="feeder" id="adsbx-card">
+      <div class="feeder-head"><h3>ADSBExchange</h3><span id="adsbx-pill" class="pill mute"><span class="dot"></span>&hellip;</span></div>
+      <div class="feeder-id">readsb client &middot; feed + MLAT</div>
+      <div class="kv-list">
+        <div class="kv-row"><span class="k">Aircraft with position</span><span class="v" id="adsbx-ac">&mdash;</span></div>
+        <div class="kv-row"><span class="k">Valid messages, last 1 min</span><span class="v" id="adsbx-msgs">&mdash;</span></div>
+      </div>
+      <div class="sub-divider">
+        <div class="kv-list">
+          <div class="kv-row"><span class="k">MLAT peers</span><span class="v" id="mlat-peers">&mdash;</span></div>
+          <div class="kv-row"><span class="k">MLAT msg rate</span><span class="v" id="mlat-rate">&mdash;</span></div>
+          <div class="kv-row"><span class="k">Position reports</span><span class="v" id="mlat-pos">&mdash;</span></div>
+        </div>
+      </div>
+      <p class="caption">MLAT multilaterates aircraft without their own ADS-B position by timing the same signal across nearby receivers.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="section-head"><h2>Aircraft in range</h2><span class="note" id="aircraft-count-note">&nbsp;</span></div>
+  <div class="tbl-wrap" id="aircraft-wrap"></div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Flight history</h2>
+    <select id="history-range">
+      <option value="2">Last 2 hours</option>
+      <option value="24" selected>Last 24 hours</option>
+      <option value="168">Last 7 days</option>
+    </select>
+  </div>
+  <div class="tbl-wrap" id="history-wrap"></div>
+  <p class="caption" style="margin-top:10px;">A sighting starts when an aircraft's signal is first picked up and ends once it's absent for 5 minutes &mdash; the same aircraft passing twice counts as two entries.</p>
+</section>
+
+<footer>
+  Live from this receiver, polled every 15 seconds. Flight history is logged locally in SQLite and kept 30 days.<br>
+  <span id="footer-location"></span>
+</footer>
+
+<script>
+const fmtTime = s => new Date(s*1000).toLocaleString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+const fmtDate = s => new Date(s*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const fmtDur = sec => {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+};
+
+function pill(el, state, text){
+  el.className = 'pill ' + state;
+  el.innerHTML = `<span class="dot"></span>${text}`;
+}
+
+let locationShown = false;
+
+async function refreshStatus(){
+  let d;
+  try { d = await (await fetch('/api/status')).json(); } catch(e){ return; }
+  if (!d || !d.updated) return;
+
+  document.getElementById('updated-ts').textContent = fmtTime(d.updated);
+
+  if (!locationShown && d.receiver && d.receiver.lat != null){
+    document.getElementById('footer-location').textContent =
+      `Receiver at ${d.receiver.lat.toFixed(4)}°, ${d.receiver.lon.toFixed(4)}°.`;
+    locationShown = true;
+  }
+
+  // overall status pill
+  const t = d.throttled || {};
+  let overall = ['good','All systems normal'];
+  if (t.undervoltage_now || t.throttled_now) overall = ['critical','Needs attention now'];
+  else if ((d.temp_c||0) >= 75 || t.undervoltage_occurred) overall = ['serious','Needs attention'];
+  else if ((d.temp_c||0) >= 70) overall = ['warning','Running warm'];
+  pill(document.getElementById('status-pill'), overall[0], overall[1]);
+
+  // vitals grid
+  const up = d.uptime_s||0;
+  const upD = Math.floor(up/86400), upH = Math.floor((up%86400)/3600);
+  const memFree = d.mem && d.mem.available_mb ? (d.mem.available_mb/1024).toFixed(1) : '—';
+  const diskUsed = d.disk ? d.disk.used_gb : '—';
+  const diskTotal = d.disk ? d.disk.total_gb : '—';
+  const tempFlag = (d.temp_c||0) >= 75 ? 'flag-serious' : (d.temp_c||0) >= 70 ? 'flag-warning' : '';
+  const powerFlag = t.undervoltage_now ? 'flag-serious' : t.undervoltage_occurred ? 'flag-warning' : '';
+  const powerLabel = t.undervoltage_now ? 'Undervoltage now' : t.undervoltage_occurred ? 'Occurred this boot' : 'Stable';
+
+  document.getElementById('vitals-grid').innerHTML = `
+    <div class="tile ${tempFlag}"><div class="label">CPU temperature</div>
+      <div class="value">${d.temp_c!=null?d.temp_c.toFixed(0):'—'}<small>&deg;C</small></div>
+      ${tempFlag?`<div class="flagline">${(d.temp_c||0)>=75?'Running hot':'Running warm'}</div>`:''}</div>
+    <div class="tile ${powerFlag}"><div class="label">Power</div>
+      <div class="value" style="font-size:1rem;">${powerLabel}</div>
+      ${d.undervoltage_last_event?`<div class="flagline" style="color:var(--ink-mute);font-weight:400;">last: ${d.undervoltage_last_event}</div>`:''}</div>
+    <div class="tile"><div class="label">Uptime</div><div class="value">${upD}<small>d</small> ${upH}<small>h</small></div></div>
+    <div class="tile"><div class="label">Load average</div><div class="value">${(d.load&&d.load.l1!=null)?d.load.l1.toFixed(2):'—'}<small>1m</small></div></div>
+    <div class="tile"><div class="label">Memory free</div><div class="value">${memFree}<small>GB</small></div></div>
+    <div class="tile"><div class="label">SD card used</div><div class="value">${diskUsed}<small>/${diskTotal}GB</small></div></div>
+    <div class="tile"><div class="label">Receiver gain</div><div class="value">${d.receiver&&d.receiver.gain_db!=null?d.receiver.gain_db:'—'}<small>dB</small></div></div>
+    <div class="tile"><div class="label">Clock drift</div><div class="value">${d.receiver&&d.receiver.estimated_ppm!=null?d.receiver.estimated_ppm.toFixed(1):'—'}<small>ppm</small></div></div>
+  `;
+
+  // FR24 (optional install)
+  const fr = d.fr24 || {};
+  const fr24Card = document.getElementById('fr24-card');
+  if (!fr.running){
+    fr24Card.classList.add('disabled');
+    pill(document.getElementById('fr24-pill'), 'mute', 'Not installed');
+    document.getElementById('fr24-id').textContent = 'fr24feed not detected on this host';
+  } else {
+    fr24Card.classList.remove('disabled');
+    pill(document.getElementById('fr24-pill'), fr.receiver_status==='connected'?'good':'critical', fr.receiver_status==='connected'?'Connected':'Disconnected');
+    document.getElementById('fr24-id').textContent = `Radar ID ${fr.radar_id||'—'} · ${fr.link_type||'—'} link`;
+    document.getElementById('fr24-ac').textContent = fr.tracked_ac ?? '—';
+    document.getElementById('fr24-msgs').textContent = fr.msgs!=null ? fr.msgs.toLocaleString() : '—';
+    document.getElementById('fr24-sync').textContent = fr.sync ?? '—';
+  }
+
+  // ADSBExchange (optional install)
+  const adsbxCard = document.getElementById('adsbx-card');
+  if (d.adsbx_feed_active === 'unknown'){
+    adsbxCard.classList.add('disabled');
+    pill(document.getElementById('adsbx-pill'), 'mute', 'Not installed');
+  } else {
+    adsbxCard.classList.remove('disabled');
+    const adsbxOk = d.adsbx_feed_active === 'active';
+    pill(document.getElementById('adsbx-pill'), adsbxOk?'good':'critical', adsbxOk?'Connected':'Down');
+    document.getElementById('adsbx-ac').textContent = (d.adsbx_status&&d.adsbx_status.aircraft_with_pos) ?? '—';
+    document.getElementById('adsbx-msgs').textContent = (d.receiver&&d.receiver.messages_valid_1min) ?? '—';
+    const ml = d.mlat || {};
+    document.getElementById('mlat-peers').textContent = ml.peer_count ?? '—';
+    document.getElementById('mlat-rate').innerHTML = ml.msg_rate_received!=null ? `${ml.msg_rate_received} <small>/s</small>` : '—';
+    document.getElementById('mlat-pos').innerHTML = ml.positions_per_min!=null ? `${ml.positions_per_min} <small>/min</small>` : '—';
+  }
+
+  // aircraft table
+  const ac = d.aircraft || [];
+  document.getElementById('aircraft-count-note').textContent = `${ac.length} aircraft`;
+  const wrap = document.getElementById('aircraft-wrap');
+  if (!ac.length){
+    wrap.innerHTML = `<div class="empty">No aircraft in range right now &mdash; traffic volume rises and falls through the day.</div>`;
+  } else {
+    wrap.innerHTML = `<table><thead><tr><th>Flight</th><th>Hex</th><th style="text-align:right;">Altitude</th><th style="text-align:right;">Ground spd</th></tr></thead><tbody>
+      ${ac.map(a=>`<tr><td class="flight">${a.flight||'<span style=\"color:var(--ink-mute);font-weight:400;\">—</span>'}</td><td class="num mono">${a.hex}</td>
+        <td class="num">${a.alt_baro!=null?a.alt_baro.toLocaleString()+' ft':'—'}</td>
+        <td class="num">${a.gs!=null?Math.round(a.gs)+' kt':'—'}</td></tr>`).join('')}
+    </tbody></table>`;
+  }
+}
+
+function drawSpark(canvas, points){
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w*dpr; canvas.height = h*dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  if (!points.length) return;
+  const vals = points.map(p=>p[1]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = (max-min) || 1;
+  const x = i => (i/(points.length-1||1)) * (w-4) + 2;
+  const y = v => h-4 - ((v-min)/span) * (h-8);
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2a78d6';
+
+  ctx.beginPath();
+  points.forEach((p,i)=>{ const px=x(i), py=y(p[1]); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
+  ctx.lineTo(x(points.length-1), h-2); ctx.lineTo(x(0), h-2); ctx.closePath();
+  ctx.fillStyle = accent + '22';
+  ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((p,i)=>{ const px=x(i), py=y(p[1]); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
+  ctx.lineWidth = 2; ctx.lineCap='round'; ctx.strokeStyle = accent;
+  ctx.stroke();
+
+  const lastX = x(points.length-1), lastY = y(points[points.length-1][1]);
+  ctx.beginPath(); ctx.arc(lastX,lastY,3,0,7); ctx.fillStyle = accent; ctx.fill();
+}
+
+async function refreshMetrics(){
+  let d;
+  try { d = await (await fetch('/api/metrics?hours=6')).json(); } catch(e){ return; }
+  const tempPts = d.filter(r=>r.temp_c!=null).map(r=>[r.ts, r.temp_c]);
+  const acPts = d.map(r=>[r.ts, r.aircraft_count||0]);
+  const tc = document.getElementById('spark-temp');
+  const ac = document.getElementById('spark-aircraft');
+  if (tempPts.length>1){
+    drawSpark(tc, tempPts);
+    const vals = tempPts.map(p=>p[1]);
+    document.getElementById('spark-temp-range').textContent = `${Math.min(...vals).toFixed(0)}–${Math.max(...vals).toFixed(0)}°C over ${((tempPts[tempPts.length-1][0]-tempPts[0][0])/3600).toFixed(1)}h`;
+  }
+  if (acPts.length>1){
+    drawSpark(ac, acPts);
+    const vals = acPts.map(p=>p[1]);
+    document.getElementById('spark-aircraft-range').textContent = `${Math.min(...vals)}–${Math.max(...vals)} aircraft`;
+  }
+}
+
+async function refreshHistory(){
+  const hours = document.getElementById('history-range').value;
+  let rows;
+  try { rows = await (await fetch('/api/history?hours='+hours)).json(); } catch(e){ return; }
+  const wrap = document.getElementById('history-wrap');
+  if (!rows.length){
+    wrap.innerHTML = `<div class="empty">No flights logged yet in this window &mdash; the history log fills in as aircraft pass overhead.</div>`;
+    return;
+  }
+  const nowSec = Date.now()/1000;
+  wrap.innerHTML = `<table><thead><tr><th>Flight / hex</th><th>First seen</th><th>Last seen</th><th style="text-align:right;">Duration</th><th style="text-align:right;">Max alt</th><th style="text-align:right;">Max spd</th></tr></thead><tbody>
+    ${rows.map(r=>{
+      const inRange = (nowSec - r.last_seen) < 60;
+      return `<tr><td class="flight">${r.flight || `<span class="mono" style="font-weight:400;color:var(--ink-mute);">${r.hex}</span>`}</td>
+      <td>${fmtDate(r.first_seen)}</td>
+      <td>${inRange?'<span class="pill good" style="padding:2px 8px;"><span class="dot"></span>In range</span>':fmtDate(r.last_seen)}</td>
+      <td class="num">${fmtDur(r.last_seen-r.first_seen)}</td>
+      <td class="num">${r.max_alt!=null?r.max_alt.toLocaleString()+' ft':'—'}</td>
+      <td class="num">${r.max_gs!=null?Math.round(r.max_gs)+' kt':'—'}</td></tr>`;
+    }).join('')}
+  </tbody></table>`;
+}
+
+document.getElementById('history-range').addEventListener('change', refreshHistory);
+refreshStatus(); refreshMetrics(); refreshHistory();
+setInterval(refreshStatus, 12000);
+setInterval(refreshMetrics, 60000);
+setInterval(refreshHistory, 60000);
+</script>
+</body>
+</html>

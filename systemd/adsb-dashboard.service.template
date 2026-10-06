@@ -1,0 +1,14 @@
+[Unit]
+Description=ADS-B ground station dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__PYTHON__ __INSTALL_DIR__/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
