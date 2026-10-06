@@ -12,6 +12,7 @@ const fmtDate = s => new Date(s*1000).toLocaleString(undefined,{month:"short",da
 const fmtClock = s => new Date(s*1000).toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"});
 const pad3 = n => String(Math.round(n) % 360).padStart(3, "0");
 function fmtDur(sec){ sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60; return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; }
+function fmtUptime(up){ return up >= 86400 ? `${Math.floor(up/86400)} d ${Math.floor((up%86400)/3600)} h` : up >= 3600 ? `${Math.floor(up/3600)} h ${Math.floor((up%3600)/60)} min` : `${Math.floor(up/60)} min`; }
 function fmtAlt(a){ if (a == null) return "—"; if (a < 100) return "Ground"; return a > TRANSITION_ALT ? "FL" + String(Math.round(a/100)).padStart(3,"0") : (Math.round(a/25)*25).toLocaleString() + " ft"; }
 function distNm(lat1, lon1, lat2, lon2){ const r = Math.PI/180, a = Math.sin((lat2-lat1)*r/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin((lon2-lon1)*r/2)**2; return 2*6371000*Math.asin(Math.sqrt(a))/1852; }
 function el(tag, attrs, parent){ const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
@@ -99,7 +100,7 @@ async function refreshStatus(){
   $("pi-list").innerHTML =
     kvRow("CPU temperature", temp != null ? `${temp.toFixed(0)} <small>°C</small>` : "—", sparkSVG(tempPts), tempFlag) +
     kvRow("Power", power[0], "", power[1]) +
-    kvRow("Uptime", `${Math.floor(up/86400)} <small>d</small> ${Math.floor((up%86400)/3600)} <small>h</small>`) +
+    kvRow("Uptime", fmtUptime(up).replace(/ (d|h|min)\b/g, " <small>$1</small>")) +
     kvRow("Load, 1 / 5 / 15 min", load.l1 != null ? `${num(load.l1,2)} <small>${num(load.l5,2)} · ${num(load.l15,2)}</small>` : "—") +
     kvRow("Memory available", mem.available_mb != null ? `${num(mem.available_mb/1024,1)} <small>of ${num(mem.total_mb/1024,1)} GB</small>` : "—") +
     kvRow("SD card used", disk.used_gb != null ? `${num(disk.used_gb,1)} <small>of ${num(disk.total_gb,1)} GB</small>` : "—");
@@ -111,27 +112,47 @@ async function refreshStatus(){
     kvRow("Clock drift", rx.estimated_ppm != null ? `${num(rx.estimated_ppm,1)} <small>ppm</small>` : "—") +
     kvRow("Total messages", num(d.messages_total));
 
-  // Feeders: a quiet line when feeding, amber when MLAT isn't working, red when down
-  const feeders = d.feeders || {}, fr = d.fr24 || {}, ml = d.mlat || {};
+  // Station row: one tile per part of the station, saying whether it works right now.
+  // Tiles change at once; the annunciator above waits out short blips (app.py decides).
+  const feeders = d.feeders || {}, fr = d.fr24 || {}, ml = d.mlat || {}, ids = new Set((d.alerts || []).map(a => a.id));
   const STATE = {ok: ["", "Feeding"], degraded: ["warn", "MLAT off"], down: ["down", "Down"], stopped: ["down", "Stopped"], absent: ["off", "Not installed"]};
-  const showFeeder = (key, idText) => {
+  const tile = (id, cls, label, val, sub) => {
+    const t = $(id + "-tile");
+    t.className = "tile " + cls;
+    t.querySelector(".state").className = "state " + cls; t.querySelector(".state").textContent = label;
+    t.querySelector(".val").innerHTML = val; t.querySelector(".sub").textContent = sub;
+  };
+  const feederTile = (key, val, okSub) => {
     const f = feeders[key] || {state: "absent", detail: ""}, [cls, label] = STATE[f.state] || ["off", f.state];
+    tile(key, cls, label, f.state === "absent" ? "—" : val, f.state === "ok" ? okSub : f.detail);
     $(key + "-card").classList.toggle("disabled", f.state === "absent");
-    $(key + "-card").classList.toggle("down", cls === "down");
-    $(key + "-state").className = "state " + cls; $(key + "-state").textContent = label;
-    $(key + "-id").textContent = f.state === "ok" ? idText : f.detail;
     return f.state !== "absent";
   };
-  if (showFeeder("fr24", `Radar ${fr.radar_id || "—"} · ${fr.link_type || "—"} link`)){
+  feederTile("fr24", `${num(fr.tracked_ac)} <small>aircraft</small>`, `Radar ${fr.radar_id || "—"}`);
+  feederTile("adsbx", `${num(d.adsbx_status && d.adsbx_status.aircraft_with_pos)} <small>aircraft</small>`,
+    ml.peer_count != null ? `MLAT with ${num(ml.peer_count)} peers` : "MLAT running");
+  const rxf = feeders.receiver || {state: "absent", detail: ""};
+  tile("receiver", rxf.state === "ok" ? "" : "down", rxf.state === "ok" ? "Receiving" : rxf.state === "absent" ? "No data" : "Stalled",
+    d.message_rate != null ? `${num(d.message_rate)} <small>msg/s</small>` : "—",
+    rxf.state === "ok" ? `${num(rx.signal,1)} dBFS signal · gain ${num(rx.gain_db,1)}` : rxf.detail);
+  const piDown = ids.has("power") || ids.has("throttled"), piWarn = ids.has("temp") || ids.has("power-earlier") || ids.has("disk");
+  const piSub = t.undervoltage_now ? "Under-voltage now" : t.throttled_now ? "CPU throttled" : t.undervoltage_occurred ? "Power dipped this boot"
+    : ids.has("disk") ? `SD card: ${num(disk.free_gb,1)} GB free` : `Power stable · up ${fmtUptime(up)}`;
+  tile("pi", piDown ? "down" : piWarn ? "warn" : "", piDown ? "Fault" : piWarn ? "Check" : "Healthy",
+    temp != null ? `${temp.toFixed(0)} <small>°C</small>` : "—", piSub);
+
+  // Feeder details: the figures behind each tile
+  if (feeders.fr24 && feeders.fr24.state !== "absent"){
+    $("fr24-id").textContent = `Radar ${fr.radar_id || "—"} · ${fr.link_type || "—"} link`;
     $("fr24-ac").textContent = num(fr.tracked_ac); $("fr24-msgs").textContent = num(fr.msgs);
     $("fr24-mlat").innerHTML = fr.mlat_status == null ? "—" : fr.mlat_status === "ok" ? `${num(fr.mlat_ac)} <small>aircraft · sync ${num(fr.sync)}</small>` : esc(fr.mlat_status);
-  }
-  if (showFeeder("adsbx", "adsbexchange-feed · adsbexchange-mlat")){
+  } else $("fr24-id").textContent = "fr24feed not installed";
+  if (feeders.adsbx && feeders.adsbx.state !== "absent"){
     $("adsbx-ac").textContent = num(d.adsbx_status && d.adsbx_status.aircraft_with_pos);
     $("mlat-peers").textContent = num(ml.peer_count);
     $("mlat-rate").innerHTML = ml.msg_rate_received != null ? `${num(ml.msg_rate_received,1)} <small>/ s</small>` : "—";
     $("mlat-pos").innerHTML = ml.positions_per_min != null ? `${num(ml.positions_per_min)} <small>/ min</small>` : "—";
-  }
+  } else $("adsbx-id").textContent = "adsbexchange-feed not installed";
 }
 
 // ---------- traffic chart: today's line over the usual band ----------
