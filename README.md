@@ -1,9 +1,9 @@
 # ADS-B Pi Dashboard
 
-A dashboard and live map for a Raspberry Pi ADS-B receiver. It shows whether
-your station is healthy, how it's performing today against a normal day, where
-your antenna can hear, and every aircraft overhead, all from the Pi itself on
-your home network.
+Keep an eye on your Raspberry Pi ADS-B feeder. One page on your home network
+tells you whether the Pi is healthy, whether it's still feeding
+FlightRadar24 and ADSBExchange, and whether your receiver is hearing as much
+as it usually does. When something goes wrong, it says so at the top.
 
 [![CI](https://github.com/amirsubhi/adsb-pi-dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsubhi/adsb-pi-dashboard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -12,23 +12,32 @@ your home network.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.png">
-  <img alt="The dashboard: an all-clear line, 32 aircraft in range compared with the usual range for the time of day, messages per second, furthest aircraft today, a 24-hour traffic chart against the 7-day usual band, and a coverage plot showing the furthest range in each direction." src="docs/screenshots/dashboard-light.png">
+  <img alt="The dashboard on a normal day: an all-clear line; aircraft in range compared with the usual for the time of day; a 24-hour traffic chart and a coverage plot; the Pi's temperature, power, load, memory and SD card; receiver message rate, signal and gain; and FlightRadar24 and ADSBExchange both connected with their aircraft, message and MLAT figures." src="docs/screenshots/dashboard-light.png">
 </picture>
 
 <sub>Screenshots use the bundled receiver simulator and sample history.</sub>
 
-- **One Python file, nothing to install.** Standard library only, no pip and
-  no database server. Flight history lives in a single SQLite file.
-- **Works offline.** Every script and the map's coastline outline are served
-  from the Pi, so the pages keep working when the internet doesn't.
-- **Feeder health in one place.** FlightRadar24 and ADSBExchange status sit
-  beside the Pi's power, temperature and receiver figures.
-- **Quiet until something is wrong.** Problems appear as warnings at the top
-  of the page; a normal day shows a single line.
+## Why
+
+If you feed FlightRadar24 and ADSBExchange from one Pi, their status is
+spread around: `fr24feed-status` in a terminal, the MLAT client's log,
+`vcgencmd` for power, graphs1090 for reception. A weak power supply, a feeder
+that stopped overnight or a receiver hearing half its usual traffic can go
+unnoticed until you check each one.
+
+This dashboard reads all of them on the Pi and puts them on one page. It
+doesn't replace tar1090 or graphs1090; it's the page you open to see whether
+everything is still working.
+
+- **One Python file, nothing to install.** Standard library only, no pip, no
+  database server. History lives in a single SQLite file.
+- **Runs on the Pi, works offline.** Nothing is loaded from the internet, so
+  the page still works when the Pi's connection doesn't.
+- **Quiet until something is wrong.** A normal day shows a single line.
 
 ## Contents
 
-- [What you get](#what-you-get)
+- [What it monitors](#what-it-monitors)
 - [Quick start](#quick-start)
 - [Requirements](#requirements)
 - [Installing, updating and removing](#installing-updating-and-removing)
@@ -40,53 +49,75 @@ your home network.
 - [Development](#development)
 - [Credits and licence](#credits-and-licence)
 
-## What you get
+## What it monitors
 
-### Dashboard (`/`)
+### Alerts
 
-- **Alerts at the top, only when needed:** under-voltage, CPU throttling, a
-  hot CPU, or a feeder that has gone down.
-- **Aircraft in range, in context:** the current count and whether that's
-  busier or quieter than usual for this time of day. Beside it: messages per
-  second, today's furthest aircraft and its bearing, and unique aircraft seen
-  today.
-- **Traffic, last 24 hours,** against the usual range for each time of day
-  over the past week.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/alerts-dark.png">
+  <img alt="Three red WARNING strips at the top of the dashboard: under-voltage now, check the power supply and cable; CPU is being throttled; ADSBExchange feed is down." src="docs/screenshots/alerts-light.png">
+</picture>
+
+On a normal day one line says all checks are normal. Under-voltage, CPU
+throttling, overheating or a feeder going down appear as warnings at the top,
+worst first, each saying what to do, and the affected card turns red.
+
+### Feeders
+
+- **FlightRadar24** (`fr24feed`): whether fr24feed is running and reading
+  your receiver, its link to FlightRadar24 and link type, your radar ID,
+  aircraft tracked, messages relayed and MLAT sync count.
+- **ADSBExchange** (`adsbexchange-feed`, `adsbexchange-mlat`): whether the
+  feed service is running, aircraft with a position, and the MLAT client's
+  peers, message rate and positions per minute.
+- A feeder you don't use is greyed out as "Not installed", not reported as a
+  fault.
+
+### The Pi
+
+- **Power:** under-voltage right now, or earlier since the last boot, with
+  the time of the last event (from the Raspberry Pi firmware and kernel log).
+- **CPU throttling and temperature,** with a 6-hour trend.
+- **Load, memory, SD card space and uptime.**
+
+### Reception
+
+- **Message rate** (with a 6-hour trend), positions per minute, signal and
+  noise level, gain and clock drift.
+- **Aircraft in range against the usual** for that time of day, plus a
+  24-hour traffic chart over the past week's range, so a drop in reception
+  stands out from a quiet hour.
 - **Coverage:** the furthest position heard in each 10° direction, today
-  against your best of the past week. Hills and buildings show up as dents.
-- **This Pi and the receiver:** temperature and message rate with 6-hour
-  trend lines, power, uptime, load, memory, SD card, gain, signal and noise,
-  clock drift.
-- **Feeders:** FlightRadar24 and ADSBExchange status, aircraft and MLAT peers.
-- **Flight history:** every sighting with first and last seen, duration,
-  highest altitude and fastest speed, for the last 2 hours, 24 hours or 7 days.
+  against your best this week. A shape that shrinks can point to an antenna,
+  cable or gain problem; a dent that's always there is usually terrain or a
+  building.
+- **Furthest and unique aircraft today.**
 
-### Live map (`/map`)
+### History
+
+Every aircraft sighting with first and last seen, duration, highest altitude
+and fastest speed, kept for 30 days and filterable by the last 2 hours, 24
+hours or 7 days.
+
+### Also included
+
+- **Settings page** (`/settings`): every setting in effect and where it came
+  from, plus station checks for the usual setup problems (receiver data
+  missing or stale, no receiver position, journal not readable, low disk).
+- **A simple live map** (`/map`): the aircraft your receiver hears right now,
+  in the same style as the dashboard, with a bundled coastline so it works
+  offline. It's a quick look; for full aircraft tracking keep using
+  [tar1090](https://github.com/wiedehopf/tar1090), which most feeder images
+  already include.
+
+<details>
+<summary>Show the live map</summary>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/map-dark.png">
-  <img alt="The live map: aircraft icons coloured by altitude with short trails and callsign labels, range rings at 50 to 200 nautical miles around the receiver, a searchable aircraft list on the left and a details card for the selected aircraft." src="docs/screenshots/map-light.png">
+  <img alt="The live map: aircraft icons coloured by altitude with short trails, range rings around the receiver, an aircraft list and a details card." src="docs/screenshots/map-light.png">
 </picture>
-
-- Aircraft move smoothly between updates. Icons point along each aircraft's
-  track, are coloured by altitude, and leave a 5-minute trail.
-- A list you can search by callsign, hex code, registration, type or squawk,
-  and sort by distance, altitude or callsign.
-- Click a plane or a row for details: altitude, climb or descent rate, ground
-  speed, track, distance and bearing from you, squawk and signal strength.
-- Emergency squawks (7500 hijack, 7600 radio failure, 7700 general emergency)
-  are pinned to the top and drawn in red.
-- Range rings at 50, 100, 150 and 200 nm, and a **Live** indicator that warns
-  when data stops arriving.
-- A street map from OpenStreetMap when the Pi has internet, with a bundled
-  coastline outline underneath for when it doesn't.
-
-### Settings and station checks (`/settings`)
-
-Every setting in effect and where it came from, plus checks for the usual
-setup problems: receiver data missing or stale, no receiver position, the
-service unable to read the system journal, low disk space. The page is
-read-only; see [Settings](#settings) for why and how to change things.
+</details>
 
 All pages have **Auto / Light / Dark** themes and work on phones.
 
@@ -165,39 +196,35 @@ worst first:
 |---|---|---|
 | WARNING · Under-voltage now | The Pi isn't getting enough power right now | Use a proper 5 V / 3 A supply and a short, thick cable |
 | WARNING · CPU is being throttled | The firmware has slowed the CPU | Check power and cooling |
-| WARNING · feed disconnected / down | FlightRadar24 or ADSBExchange stopped feeding | `systemctl status fr24feed` or `adsbexchange-feed` |
+| WARNING · FlightRadar24 feed disconnected | fr24feed has lost your receiver | `systemctl status fr24feed`, and check readsb is running |
+| WARNING · ADSBExchange feed is down | The `adsbexchange-feed` service has stopped | `sudo systemctl restart adsbexchange-feed`, then `journalctl -u adsbexchange-feed` |
 | CAUTION · CPU at 75 °C | Running hot (75 °C or more) | Add a heatsink or fan, or improve airflow |
 | CAUTION · CPU running warm | 70 °C or more | Keep an eye on it, especially in hot weather |
 | CAUTION · Power dipped earlier this boot | Under-voltage happened since the last reboot | Same as under-voltage; it may come back |
 
-**Busier or quieter than usual** compares the current aircraft count with the
-range seen at the same time of day over the past week. The grey band on the
-traffic chart is that same range; it appears once there are two days of data.
+**Feeder cards.** A green dot means the feeder is running; a red border and
+"Feed down" or "Disconnected" mean it isn't. MLAT figures that stay at zero
+while the feed runs usually mean the MLAT client can't sync; check
+`journalctl -u adsbexchange-mlat`.
 
-**Coverage** draws the furthest position heard in each 10° direction. The blue
-shape is today; the grey outline is your best day this week. A dent that is
-always there usually means something blocks the antenna in that direction.
+**Is reception normal?** "Busier or quieter than usual" compares the current
+aircraft count with the range seen at the same time of day over the past
+week; the grey band on the traffic chart is that same range (it appears after
+two days of data). If the count sits below the band for hours, or the
+coverage shape shrinks, check the antenna, cable and gain.
 
 **Flight levels.** Altitudes above your transition altitude show as flight
-levels (`FL350` = 35,000 ft), the way pilots and controllers say them. Set
-`transition_alt` for your country; the installer asks for it.
+levels (`FL350` = 35,000 ft). Set `transition_alt` for your country; the
+installer asks for it.
 
-### Using the live map
+### The live map
 
-- **Click** a plane for its details, or a list row to also move the map to
-  it (rows open with **Enter** too). The × or a click on empty map closes the card.
-- **Search** matches callsign, hex code, registration, type or squawk.
-- **Trails, Labels, Range rings** switch those layers; your choices are
-  remembered in that browser.
-- **Recenter** returns to your receiver.
-- **Colours** show altitude, from orange near the ground to purple at
-  40,000 ft; the legend is in the corner. Red always means an emergency squawk.
-- A faded plane hasn't sent a position for 15 seconds. Planes with no
-  position for a minute leave the map but stay in the list.
-- **Live** turns red and counts the seconds if data stops arriving.
-
-Registration and aircraft type appear when readsb runs with an aircraft
-database (`--db-file`); otherwise the list shows the hex code.
+Click a plane, or a row in the list, for its details. Search matches
+callsign, hex code, registration, type or squawk. Colours show altitude, red
+marks an emergency squawk (7500, 7600, 7700), and the **Live** indicator
+turns red if data stops arriving. The street map comes from OpenStreetMap
+when the Pi has internet (see [Map backgrounds](#map-backgrounds)); otherwise
+the bundled coastline shows.
 
 ## Settings
 
