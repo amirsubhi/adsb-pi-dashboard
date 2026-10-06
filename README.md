@@ -12,7 +12,7 @@ as it usually does. When something goes wrong, it says so at the top.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.png">
-  <img alt="The dashboard on a normal day: an all-clear line; aircraft in range compared with the usual for the time of day; a 24-hour traffic chart and a coverage plot; the Pi's temperature, power, load, memory and SD card; receiver message rate, signal and gain; and FlightRadar24 and ADSBExchange both connected with their aircraft, message and MLAT figures." src="docs/screenshots/dashboard-light.png">
+  <img alt="The dashboard on a normal day: an all-clear line; four status tiles for FlightRadar24, ADSBExchange, the receiver and the Pi, all green; aircraft in range compared with the usual for the time of day; a 24-hour traffic chart and a coverage plot; and the details: the Pi's temperature, power, load, memory and SD card, the receiver's message rate, signal and gain, and each feeder's aircraft, message and MLAT figures." src="docs/screenshots/dashboard-light.png">
 </picture>
 
 <sub>Screenshots use the bundled receiver simulator and sample history.</sub>
@@ -55,15 +55,20 @@ everything is still working.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/alerts-dark.png">
-  <img alt="Three red WARNING strips at the top of the dashboard: under-voltage now, check the power supply and cable; CPU is being throttled; ADSBExchange feed is down." src="docs/screenshots/alerts-light.png">
+  <img alt="Four red WARNING strips at the top of the dashboard: under-voltage now; CPU is being throttled; FlightRadar24 feed is down, no link to FlightRadar24; ADSBExchange feed is down, adsbexchange-feed has failed. Below them the FlightRadar24, ADSBExchange and This Pi tiles are outlined in red, and the receiver tile is green." src="docs/screenshots/alerts-light.png">
 </picture>
 
 On a normal day one line says all checks are normal. Under-voltage, CPU
 throttling, overheating, a stalled receiver or a feeder going down appear as
-warnings at the top, worst first, each saying what to do, and the affected
-card turns red. A feeder has to stay down for a minute or two before it
+warnings at the top, worst first, each saying what to do. A feeder has to stay down for a minute or two before it
 raises an alarm, so a restart or a dropped connection that recovers on its
 own stays quiet, and feeder alarms are held back for five minutes after boot.
+
+Under the alerts, four tiles answer "is it working?" at a glance:
+**FlightRadar24**, **ADSBExchange**, **Receiver** and **This Pi**, each with
+its state, one key figure and the reason when something is wrong. Tiles
+change straight away; the alert strips wait as described above. The figures
+behind each tile are further down, under Details.
 
 ### Feeders
 
@@ -210,10 +215,12 @@ shows:
 | CAUTION · SD card nearly full | Less than 1 GB free, or more than 90 % used | at once | Clear old logs (`sudo journalctl --vacuum-size=100M`) or lower `retain_days` |
 | CAUTION · The collector hit an error | Reading the Pi's status failed, so figures may be old | at once | `journalctl -u adsb-dashboard` |
 
-**Feeder cards.** Green "Feeding" means the feed is working; amber "MLAT off"
-means it feeds but MLAT doesn't; red "Down" or "Stopped" means nothing is
-reaching that site, with the reason under the name. The card changes straight
-away; the alert strip waits as in the table above. MLAT figures that stay at zero
+**Status tiles.** Green "Feeding" means the feed is working; amber "MLAT
+off" means it feeds but MLAT doesn't; red "Down" or "Stopped" means nothing
+is reaching that site, with the reason underneath. The Receiver tile turns
+red when readsb stops updating, and This Pi shows "Check" (amber) or "Fault"
+(red) along with the matching alert. Tiles change straight away; the alert
+strip waits as in the table above. MLAT figures that stay at zero
 while the feed runs usually mean the MLAT client can't sync; check
 `journalctl -u adsbexchange-mlat`.
 

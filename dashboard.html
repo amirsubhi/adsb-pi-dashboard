@@ -6,8 +6,9 @@
 <title>ADS-B Ground Station</title>
 <script src="/static/theme.js"></script>
 <style>
-  /* Layout: header + annunciator, then a performance band (hero figure + readouts), two charts side by side,
-     Pi/receiver lists, feeders, history. Quiet when normal; colour only for state ("dark cockpit"). */
+  /* Layout: header + annunciator, a station row (one tile per feeder, the receiver and the Pi), then reception
+     (hero figure, readouts, two charts), details (Pi/receiver lists, feeder figures), history.
+     Quiet when normal; colour only for state ("dark cockpit"). */
   :root{
     --page:#f3f5f8; --surface:#ffffff; --surface-2:#eef1f5; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#7a8594;
     --line:#dfe3e9; --line-strong:#c5ccd6; --grid:#e8ecf1; --accent:#2a78d6; --accent-soft:#e7f0fb; --band:rgba(78,90,104,.12);
@@ -64,6 +65,19 @@
   .ann.warning{background:var(--warning-soft);border-color:var(--warning);} .ann.warning b{color:var(--warning);}
   .ann span{color:var(--ink);}
   .allclear{margin-top:12px;font-size:.86rem;color:var(--ink-mute);}
+
+  /* ---------- station row: is each part of the station working? ---------- */
+  .station{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px;}
+  @media (max-width:760px){ .station{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;} }
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0;}
+  .tile.down{border-color:var(--critical);}
+  .tile.warn{border-color:var(--warning);}
+  .tile.off{opacity:.55;}
+  .tile h2{font-family:var(--font-data);font-size:.86rem;font-weight:600;}
+  .tile .state{margin-top:4px;}
+  .tile .val{font-size:1.5rem;font-weight:600;margin-top:10px;letter-spacing:-.01em;font-variant-numeric:tabular-nums;}
+  .tile .sub{font-size:.8rem;color:var(--ink-mute);margin-top:2px;overflow-wrap:anywhere;}
+  @media (max-width:760px){ .tile{padding:10px 12px;} .tile .val{font-size:1.25rem;} }
 
   /* ---------- performance band ---------- */
   .perf{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr);gap:24px 40px;align-items:end;padding:26px 0 22px;border-bottom:1px solid var(--line);}
@@ -141,7 +155,6 @@
   .feeders{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}
   @media (max-width:760px){ .feeders{grid-template-columns:1fr;} }
   .feeder{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px 6px;min-width:0;}
-  .feeder.down{border-color:var(--critical);}
   .feeder.disabled{opacity:.55;}
   .feeder-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
   .feeder-head h3{font-family:var(--font-data);font-size:1rem;font-weight:600;}
@@ -194,6 +207,13 @@
 </header>
 <div id="annunciator" class="annunciator" aria-live="polite"></div>
 
+<div class="station" aria-label="Station status">
+  <div class="tile off" id="fr24-tile"><h2>FlightRadar24</h2><span class="state off">Checking</span><div class="val">—</div><div class="sub">&nbsp;</div></div>
+  <div class="tile off" id="adsbx-tile"><h2>ADSBExchange</h2><span class="state off">Checking</span><div class="val">—</div><div class="sub">&nbsp;</div></div>
+  <div class="tile off" id="receiver-tile"><h2>Receiver</h2><span class="state off">Checking</span><div class="val">—</div><div class="sub">&nbsp;</div></div>
+  <div class="tile off" id="pi-tile"><h2>This Pi</h2><span class="state off">Checking</span><div class="val">—</div><div class="sub">&nbsp;</div></div>
+</div>
+
 <div class="perf">
   <div class="hero">
     <div class="label">Aircraft in range</div>
@@ -228,6 +248,7 @@
 </section>
 
 <section>
+  <div class="section-head"><h2>Details</h2></div>
   <div class="cols">
     <div><h2 class="group-title">This Pi</h2><dl class="kv" id="pi-list"></dl></div>
     <div><h2 class="group-title">Receiver</h2><dl class="kv" id="rx-list"></dl></div>
@@ -235,10 +256,9 @@
 </section>
 
 <section>
-  <div class="section-head"><h2>Feeders</h2></div>
   <div class="feeders">
     <div class="feeder" id="fr24-card">
-      <div class="feeder-head"><h3>FlightRadar24</h3><span id="fr24-state" class="state off">Checking</span></div>
+      <div class="feeder-head"><h3>FlightRadar24</h3></div>
       <div class="feeder-id" id="fr24-id">fr24feed</div>
       <dl class="kv">
         <div><dt>Aircraft tracked</dt><dd id="fr24-ac">—</dd></div>
@@ -247,7 +267,7 @@
       </dl>
     </div>
     <div class="feeder" id="adsbx-card">
-      <div class="feeder-head"><h3>ADSBExchange</h3><span id="adsbx-state" class="state off">Checking</span></div>
+      <div class="feeder-head"><h3>ADSBExchange</h3></div>
       <div class="feeder-id" id="adsbx-id">adsbexchange-feed · adsbexchange-mlat</div>
       <dl class="kv">
         <div><dt>Aircraft with position</dt><dd id="adsbx-ac">—</dd></div>

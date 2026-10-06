@@ -21,6 +21,10 @@ upgraded in place.
   quiet for five minutes after boot, so restarts don't raise false alarms.
   The alert logic now lives in `app.py`; `/api/status` has new `alerts` and
   `feeders` fields.
+- A row of four status tiles under the alerts (FlightRadar24, ADSBExchange,
+  Receiver, This Pi; two by two on a phone) shows whether each part of the
+  station is working, with the reason when it isn't. The feeder figures move
+  to a Details section further down.
 
 ## 1.3.0: Live map
 
