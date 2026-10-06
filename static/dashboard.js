@@ -58,17 +58,13 @@ async function refreshStatus(){
   }
 
   // Annunciator: only what is abnormal, worst first. Nothing loud when all is well.
-  const issues = [];
-  if (t.undervoltage_now) issues.push(["critical", "WARNING", "Under-voltage now. Check the power supply and cable."]);
-  if (t.throttled_now) issues.push(["critical", "WARNING", "CPU is being throttled."]);
-  if (d.fr24 && d.fr24.running && d.fr24.receiver_status !== "connected") issues.push(["critical", "WARNING", "FlightRadar24 feed disconnected."]);
-  if (d.adsbx_feed_active && !["active","unknown"].includes(d.adsbx_feed_active)) issues.push(["critical", "WARNING", "ADSBExchange feed is down."]);
-  if (temp >= 75) issues.push(["warning", "CAUTION", `CPU at ${temp.toFixed(0)} °C. Check cooling.`]);
-  else if (temp >= 70) issues.push(["warning", "CAUTION", `CPU running warm at ${temp.toFixed(0)} °C.`]);
-  if (!t.undervoltage_now && t.undervoltage_occurred) issues.push(["warning", "CAUTION", "Power dipped earlier this boot" + (d.undervoltage_last_event ? ` (last at ${esc(d.undervoltage_last_event)})` : "") + "."]);
+  // app.py decides what counts (and waits out short blips); this only draws it.
+  const LABEL = {warning: ["critical", "WARNING"], caution: ["warning", "CAUTION"]};
+  const issues = (d.alerts || []).map(a => [LABEL[a.level][0], LABEL[a.level][1], esc(a.text)]);
+  if (d.error) issues.push(["warning", "CAUTION", "The collector hit an error, so these figures may be old: " + esc(d.error)]);
   $("annunciator").innerHTML = issues.length
     ? issues.map(i => `<div class="ann ${i[0]}"><b>${i[1]}</b><span>${i[2]}</span></div>`).join("")
-    : `<p class="allclear">All checks normal: power, temperature and feeders.</p>`;
+    : `<p class="allclear">All checks normal: power, temperature, receiver and feeders.</p>`;
 
   // Performance band
   $("hero-fig").textContent = ac.length;
@@ -115,25 +111,22 @@ async function refreshStatus(){
     kvRow("Clock drift", rx.estimated_ppm != null ? `${num(rx.estimated_ppm,1)} <small>ppm</small>` : "—") +
     kvRow("Total messages", num(d.messages_total));
 
-  // Feeders: a quiet line when connected, red only when down
-  const fr = d.fr24 || {};
-  const setState = (id, cls, text) => { $(id).className = "state " + cls; $(id).textContent = text; };
-  $("fr24-card").classList.toggle("disabled", !fr.running);
-  $("fr24-card").classList.toggle("down", !!fr.running && fr.receiver_status !== "connected");
-  if (!fr.running){ setState("fr24-state", "off", "Not installed"); $("fr24-id").textContent = "fr24feed not found on this Pi"; }
-  else {
-    const ok = fr.receiver_status === "connected";
-    setState("fr24-state", ok ? "" : "down", ok ? "Connected" : "Disconnected");
-    $("fr24-id").textContent = `Radar ${fr.radar_id || "—"} · ${fr.link_type || "—"} link`;
-    $("fr24-ac").textContent = num(fr.tracked_ac); $("fr24-msgs").textContent = num(fr.msgs); $("fr24-sync").textContent = num(fr.sync);
+  // Feeders: a quiet line when feeding, amber when MLAT isn't working, red when down
+  const feeders = d.feeders || {}, fr = d.fr24 || {}, ml = d.mlat || {};
+  const STATE = {ok: ["", "Feeding"], degraded: ["warn", "MLAT off"], down: ["down", "Down"], stopped: ["down", "Stopped"], absent: ["off", "Not installed"]};
+  const showFeeder = (key, idText) => {
+    const f = feeders[key] || {state: "absent", detail: ""}, [cls, label] = STATE[f.state] || ["off", f.state];
+    $(key + "-card").classList.toggle("disabled", f.state === "absent");
+    $(key + "-card").classList.toggle("down", cls === "down");
+    $(key + "-state").className = "state " + cls; $(key + "-state").textContent = label;
+    $(key + "-id").textContent = f.state === "ok" ? idText : f.detail;
+    return f.state !== "absent";
+  };
+  if (showFeeder("fr24", `Radar ${fr.radar_id || "—"} · ${fr.link_type || "—"} link`)){
+    $("fr24-ac").textContent = num(fr.tracked_ac); $("fr24-msgs").textContent = num(fr.msgs);
+    $("fr24-mlat").innerHTML = fr.mlat_status == null ? "—" : fr.mlat_status === "ok" ? `${num(fr.mlat_ac)} <small>aircraft · sync ${num(fr.sync)}</small>` : esc(fr.mlat_status);
   }
-  const ax = d.adsbx_feed_active;
-  $("adsbx-card").classList.toggle("disabled", ax === "unknown");
-  $("adsbx-card").classList.toggle("down", ax !== "unknown" && ax !== "active");
-  if (ax === "unknown") setState("adsbx-state", "off", "Not installed");
-  else {
-    setState("adsbx-state", ax === "active" ? "" : "down", ax === "active" ? "Connected" : "Feed down");
-    const ml = d.mlat || {};
+  if (showFeeder("adsbx", "adsbexchange-feed · adsbexchange-mlat")){
     $("adsbx-ac").textContent = num(d.adsbx_status && d.adsbx_status.aircraft_with_pos);
     $("mlat-peers").textContent = num(ml.peer_count);
     $("mlat-rate").innerHTML = ml.msg_rate_received != null ? `${num(ml.msg_rate_received,1)} <small>/ s</small>` : "—";

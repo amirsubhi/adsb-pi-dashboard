@@ -116,10 +116,29 @@ class ParserTest(unittest.TestCase):
     def test_fr24_status(self):
         d = app.parse_fr24_text(fixture("fr24feed-status.txt"))
         self.assertEqual(d, {"running": True, "link_status": "connected", "link_type": "TCP", "radar_id": "T-WMKK214",
-                             "tracked_ac": 38, "receiver_status": "connected", "msgs": 1243881, "sync": 21})
+                             "tracked_ac": 38, "receiver_status": "connected", "msgs": 1243881, "sync": 21,
+                             "mlat_status": "ok", "mlat_ac": 30})
 
     def test_fr24_not_running(self):
         self.assertEqual(app.parse_fr24_text(""), {"running": False})
+        # "not running" contains "running"; this used to show a stopped feeder as up
+        self.assertEqual(app.parse_fr24_text(fixture("fr24feed-status-stopped.txt")), {"running": False})
+
+    def test_fr24_faults_are_parsed_not_dropped(self):
+        d = app.parse_fr24_text(fixture("fr24feed-status-faults.txt"))
+        self.assertTrue(d["running"])
+        self.assertEqual(d["link_status"], "connecting")
+        self.assertNotIn("link_type", d)
+        self.assertEqual(d["receiver_status"], "down")
+        self.assertEqual(d["mlat_status"], "not running")
+
+    def test_fr24_without_status_markers(self):
+        d = app.parse_fr24_text(fixture("fr24feed-status-plain.txt"))
+        self.assertEqual((d["running"], d["link_status"], d["link_type"], d["receiver_status"]), (True, "connected", "UDP", "connected"))
+        self.assertNotIn("msgs", d)
+
+    def test_mlat_server_status(self):
+        self.assertEqual(app.parse_mlat_lines(fixture("mlat-journal.txt").splitlines())["server_status"], "connected")
 
     def test_mlat_journal_takes_latest_values(self):
         d = app.parse_mlat_lines(fixture("mlat-journal.txt").splitlines())
@@ -145,6 +164,87 @@ class ServiceStateTest(unittest.TestCase):
         self.assertEqual(app.service_state("loaded", "active"), "active")
         self.assertEqual(app.service_state("loaded", "failed"), "failed")
         self.assertEqual(app.service_state("loaded", "inactive"), "inactive")
+
+class HealthTest(TempDataDir):
+    """Feeder states and the debounced alerts built from a snapshot."""
+    def snap(self, **over):
+        d = {"uptime_s": 86400, "temp_c": 52.0, "throttled": {}, "disk": {"total_gb": 30.0, "used_gb": 8.0, "free_gb": 20.5},
+             "fr24": dict(app.parse_fr24_text(fixture("fr24feed-status.txt")), installed=True),
+             "adsbx_feed_active": "active", "adsbx_mlat_active": "active",
+             "mlat": app.parse_mlat_lines(fixture("mlat-journal.txt").splitlines()), "receiver_age_s": 0.4}
+        d.update(over)
+        d["feeders"] = app.feeder_states(d)
+        return d
+
+    def states(self, **over):
+        return {k: v["state"] for k, v in self.snap(**over)["feeders"].items()}
+
+    def test_all_well(self):
+        s = self.snap()
+        self.assertEqual(self.states(), {"fr24": "ok", "adsbx": "ok", "receiver": "ok"})
+        self.assertEqual(app.health_alerts(s, {}, 1000.0), [])
+
+    def test_feeder_states(self):
+        faults = dict(app.parse_fr24_text(fixture("fr24feed-status-faults.txt")), installed=True)
+        self.assertEqual(self.states(fr24=faults)["fr24"], "down")
+        self.assertEqual(self.states(fr24={"installed": True, "running": False})["fr24"], "stopped")
+        self.assertEqual(self.states(fr24={"installed": False, "running": False})["fr24"], "absent")
+        self.assertEqual(self.states(fr24=dict(self.snap()["fr24"], mlat_status="not running"))["fr24"], "degraded")
+        self.assertEqual(self.states(adsbx_feed_active="unknown")["adsbx"], "absent")
+        self.assertEqual(self.states(adsbx_feed_active="inactive")["adsbx"], "stopped")
+        self.assertEqual(self.states(adsbx_feed_active="failed")["adsbx"], "down")
+        self.assertEqual(self.states(adsbx_mlat_active="failed")["adsbx"], "degraded")
+        self.assertEqual(self.states(mlat={})["adsbx"], "degraded")  # nothing logged in the last 30 minutes
+        self.assertEqual(self.states(adsbx_mlat_active="unknown", mlat={})["adsbx"], "ok")  # MLAT not installed
+        self.assertEqual(self.states(receiver_age_s=95)["receiver"], "down")
+        self.assertEqual(self.states(receiver_age_s=None)["receiver"], "absent")
+
+    def test_feeder_alerts_wait_before_firing(self):
+        s, since = self.snap(adsbx_feed_active="activating"), {}
+        self.assertEqual(app.health_alerts(s, since, 1000.0), [])
+        self.assertEqual(app.health_alerts(s, since, 1080.0), [])
+        alerts = app.health_alerts(s, since, 1091.0)
+        self.assertEqual([(a["id"], a["level"], a["since"]) for a in alerts], [("adsbx", "warning", 1000.0)])
+        # once it recovers the clock resets, so the next blip waits again
+        app.health_alerts(self.snap(), since, 1100.0)
+        self.assertEqual(app.health_alerts(s, since, 1110.0), [])
+
+    def test_fr24_link_loss_is_a_warning(self):
+        fr = dict(self.snap()["fr24"], link_status="connecting")
+        s, since = self.snap(fr24=fr), {}
+        app.health_alerts(s, since, 0.0)
+        self.assertIn("No link to FlightRadar24", app.health_alerts(s, since, 121.0)[0]["text"])
+
+    def test_mlat_problems_are_a_slow_caution(self):
+        s, since = self.snap(adsbx_mlat_active="failed"), {}
+        app.health_alerts(s, since, 0.0)
+        self.assertEqual(app.health_alerts(s, since, 599.0), [])
+        self.assertEqual([(a["id"], a["level"]) for a in app.health_alerts(s, since, 600.0)], [("adsbx-mlat", "caution")])
+
+    def test_boot_grace_holds_feeders_but_not_power(self):
+        s, since = self.snap(uptime_s=120, adsbx_feed_active="activating", throttled={"undervoltage_now": True}), {}
+        app.health_alerts(s, since, 0.0)
+        self.assertEqual([a["id"] for a in app.health_alerts(s, since, 200.0)], ["power"])
+
+    def test_stale_receiver(self):
+        s = self.snap(receiver_age_s=75)
+        self.assertEqual([a["id"] for a in app.health_alerts(s, {}, 0.0)], ["receiver"])
+
+    def test_warnings_come_before_cautions(self):
+        s = self.snap(temp_c=77.0, throttled={"undervoltage_now": True}, disk={"total_gb": 30.0, "used_gb": 29.5, "free_gb": 0.5})
+        self.assertEqual([(a["id"], a["level"]) for a in app.health_alerts(s, {}, 0.0)],
+                         [("power", "warning"), ("temp", "caution"), ("disk", "caution")])
+
+    def test_disk_nearly_full(self):
+        ids = lambda **d: [a["id"] for a in app.health_alerts(self.snap(disk=d), {}, 0.0)]
+        self.assertEqual(ids(total_gb=64.0, used_gb=59.0, free_gb=5.0), ["disk"])   # over 90 % used
+        self.assertEqual(ids(total_gb=8.0, used_gb=6.5, free_gb=0.8), ["disk"])     # under 1 GB free
+        self.assertEqual(ids(total_gb=30.0, used_gb=20.0, free_gb=10.0), [])
+
+    def test_receiver_age_from_aircraft_json(self):
+        self.assertEqual(app.receiver_age(1791274012.5), 12.5)
+        self.configure(env={"ADSB_READSB_DIR": self.tmp})
+        self.assertIsNone(app.receiver_age(1791274012.5))
 
 class ReadsbTest(TempDataDir):
     def test_aircraft_list(self):
