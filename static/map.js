@@ -105,11 +105,13 @@ function applyTrails(trails){
 }
 
 // ---------- formatting ----------
+// unit=true also spells out the altitude in feet alongside a flight level,
+// since "FL350" means nothing if you don't already know what a flight level is.
 function fmtAlt(a, unit){
   if (a == null) return "—";
   if (a === "ground" || a < 100) return "Ground";
   const r = Math.round(a/25)*25;
-  return r > CONFIG.transition_alt ? "FL" + String(Math.round(a/100)).padStart(3, "0") : r.toLocaleString() + (unit ? " ft" : "");
+  return r > CONFIG.transition_alt ? "FL" + String(Math.round(a/100)).padStart(3, "0") + (unit ? ` (${r.toLocaleString()} ft)` : "") : r.toLocaleString() + (unit ? " ft" : "");
 }
 const vrArrow = v => v > 200 ? " ↑" : v < -200 ? " ↓" : "";
 const vrLabel = v => v == null || Math.abs(v) <= 200 ? "Vertical rate" : v > 0 ? "Climbing" : "Descending";
@@ -121,7 +123,7 @@ function glyph(p){
     (emg ? "var(--danger)" : hasPos(p) ? altColor(altNum(p)) : "var(--ink-mute)") + '"><path d="' + PLANE_PATH + '"/></svg>';
 }
 function subline(p){
-  const parts = [p.type || p.desc, p.reg].filter(Boolean).map(esc);
+  const parts = [airlineOf(p.flight), p.type || p.desc, p.reg].filter(Boolean).map(esc);
   if (!hasPos(p)) parts.push("no position");
   return parts.length ? parts.join(" · ") : "Hex " + esc(p.hex.toUpperCase());
 }
@@ -135,7 +137,7 @@ function renderList(){
   const furthest = Math.max(0, ...rows.map(r => r.d || 0));
   $("statline").innerHTML = `<span><b>${planes.size}</b> aircraft</span> · <span><b>${positioned}</b> on the map</span>` +
     (HOME && positioned ? ` · <span>furthest <b>${furthest.toFixed(0)}</b> nm</span>` : "");
-  if (q) rows = rows.filter(({p}) => [p.flight, p.hex.toUpperCase(), p.type, p.reg, p.squawk].some(s => s && String(s).toUpperCase().includes(q)));
+  if (q) rows = rows.filter(({p}) => [p.flight, airlineOf(p.flight), p.hex.toUpperCase(), p.type, p.reg, p.squawk].some(s => s && String(s).toUpperCase().includes(q)));
   const far = 1e9;
   rows.sort((a, b) => (!!EMERGENCY[b.p.squawk]) - (!!EMERGENCY[a.p.squawk]) ||
     (sortKey === "dist" ? (a.d ?? far) - (b.d ?? far)
@@ -150,7 +152,7 @@ function renderList(){
     return `<div class="row${p.hex === selected ? " sel" : ""}${emg ? " emg" : ""}" role="listitem" tabindex="0" data-hex="${esc(p.hex)}">` +
       `<span class="glyph">${glyph(p)}</span>` +
       `<span class="cs">${esc(label(p))}${emg ? `<span class="sq">${esc(p.squawk)}</span>` : ""}</span>` +
-      `<span class="alt">${fmtAlt(p.alt)}${vrArrow(p.vr)}</span>` +
+      `<span class="alt" title="${esc(fmtAlt(p.alt, true))}">${fmtAlt(p.alt)}${vrArrow(p.vr)}</span>` +
       `<span class="sub">${subline(p)}</span>` +
       `<span class="dist">${d == null ? "" : d.toFixed(0) + " nm"}</span></div>`;
   }).join("");
@@ -171,7 +173,7 @@ function renderCard(){
   if (!p){ cardEl.hidden = true; return; }
   const v = vis(p), emg = EMERGENCY[p.squawk];
   const d = HOME && v ? distNm(HOME.lat, HOME.lon, v.lat, v.lon) : null, b = HOME && v ? bearing(HOME.lat, HOME.lon, v.lat, v.lon) : null;
-  const meta = [p.desc || p.type, p.reg].filter(Boolean).map(esc).concat(`<span class="mono">${esc(p.hex.toUpperCase())}</span>`).join(" · ");
+  const meta = [airlineOf(p.flight), p.desc || p.type, p.reg].filter(Boolean).map(esc).concat(`<span class="mono">${esc(p.hex.toUpperCase())}</span>`).join(" · ");
   const age = p.seen_pos != null ? Math.round(nowS() - p.t) : null;
   cardEl.hidden = false;
   cardEl.innerHTML =

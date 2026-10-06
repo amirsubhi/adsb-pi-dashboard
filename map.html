@@ -159,7 +159,7 @@ h1 { font-family: var(--font-data); font-size: 1.05rem; font-weight: 600; margin
       <div class="where-row"><p class="where"><a class="back" href="/">Dashboard</a> · Live map · <a class="back" href="/settings">Settings</a></p>
         <span class="pill" id="feed"><span class="dot"></span>Connecting</span></div>
       <p id="statline" class="statline">&nbsp;</p>
-      <input id="q" class="search" type="search" placeholder="Search callsign, hex, type or squawk" aria-label="Search aircraft">
+      <input id="q" class="search" type="search" placeholder="Search callsign, airline, hex, type or squawk" aria-label="Search aircraft">
       <div class="sort-row">
         <span>Sort by</span>
         <div class="seg" role="group" aria-label="Sort list">
@@ -197,6 +197,7 @@ h1 { font-family: var(--font-data); font-size: 1.05rem; font-weight: 600; margin
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/vendor/topojson-client/topojson-client.min.js"></script>
+<script src="/static/airlines.js"></script>
 <script src="/static/map.js"></script>
 </body>
 </html>

@@ -231,8 +231,9 @@ two days of data). If the count sits below the band for hours, or the
 coverage shape shrinks, check the antenna, cable and gain.
 
 **Flight levels.** Altitudes above your transition altitude show as flight
-levels (`FL350` = 35,000 ft). Set `transition_alt` for your country; the
-installer asks for it.
+levels (`FL350` = 35,000 ft); where there's room (the history table, the
+live map's detail card) the feet are spelled out alongside it. Set
+`transition_alt` for your country; the installer asks for it.
 
 ### The live map
 
@@ -443,7 +444,7 @@ app.py                  the server: collector, history store and web server
 dashboard.html          dashboard page
 map.html                live map page
 settings.html           settings and station checks page
-static/                 the pages' JavaScript (theme, dashboard, map, settings)
+static/                 the pages' JavaScript (theme, airline lookup, dashboard, map, settings)
 vendor/                 bundled Leaflet and topojson-client, with licences
 geo/                    bundled Natural Earth coastline data, with licence
 settings.example.ini    every setting, documented; copied to settings.ini

@@ -19,7 +19,7 @@ import configparser, json, math, os, re, shutil, sqlite3, subprocess, sys, threa
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # ---------- settings ----------
 
@@ -137,6 +137,7 @@ MAP_HTML_PATH = os.path.join(DATA_DIR, "map.html")
 JS, CSS, JSON_TYPE = "application/javascript", "text/css", "application/json"
 STATIC_FILES = {
     "/static/theme.js": ("static/theme.js", JS, False),
+    "/static/airlines.js": ("static/airlines.js", JS, False),
     "/static/dashboard.js": ("static/dashboard.js", JS, False),
     "/static/settings.js": ("static/settings.js", JS, False),
     "/static/map.js": ("static/map.js", JS, False),

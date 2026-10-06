@@ -13,7 +13,14 @@ const fmtClock = s => new Date(s*1000).toLocaleTimeString(undefined,{hour:"2-dig
 const pad3 = n => String(Math.round(n) % 360).padStart(3, "0");
 function fmtDur(sec){ sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60; return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; }
 function fmtUptime(up){ return up >= 86400 ? `${Math.floor(up/86400)} d ${Math.floor((up%86400)/3600)} h` : up >= 3600 ? `${Math.floor(up/3600)} h ${Math.floor((up%3600)/60)} min` : `${Math.floor(up/60)} min`; }
-function fmtAlt(a){ if (a == null) return "—"; if (a < 100) return "Ground"; return a > TRANSITION_ALT ? "FL" + String(Math.round(a/100)).padStart(3,"0") : (Math.round(a/25)*25).toLocaleString() + " ft"; }
+// unit=true also spells out the altitude in feet alongside a flight level,
+// since "FL350" means nothing if you don't already know what a flight level is.
+function fmtAlt(a, unit){
+  if (a == null) return "—";
+  if (a < 100) return "Ground";
+  const r = Math.round(a/25)*25;
+  return r > TRANSITION_ALT ? "FL" + String(Math.round(a/100)).padStart(3,"0") + (unit ? ` (${r.toLocaleString()} ft)` : "") : r.toLocaleString() + " ft";
+}
 function distNm(lat1, lon1, lat2, lon2){ const r = Math.PI/180, a = Math.sin((lat2-lat1)*r/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin((lon2-lon1)*r/2)**2; return 2*6371000*Math.asin(Math.sqrt(a))/1852; }
 function el(tag, attrs, parent){ const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
 const kvRow = (k, v, extra="", flag=null) => `<div><dt>${k}</dt><dd>${flag ? `<span class="flag ${flag[0]}">${flag[1]}</span>` : ""}${v}</dd>${extra || "<span></span>"}</div>`;
@@ -78,16 +85,20 @@ async function refreshStatus(){
   }
   $("ro-msg").textContent = num(d.message_rate);
   const best = d.range_today;
-  if (best){ $("ro-range").innerHTML = `${num(best.nm)} <small>nm</small>`; $("ro-range-sub").textContent = `${best.flight || String(best.hex).toUpperCase()}, bearing ${pad3(best.bearing)}°`; }
+  if (best){
+    const cs = best.flight || String(best.hex).toUpperCase(), air = airlineOf(best.flight);
+    $("ro-range").innerHTML = `${num(best.nm)} <small>nm</small>`;
+    $("ro-range-sub").textContent = `${air ? `${air} (${cs})` : cs}, bearing ${pad3(best.bearing)}°`;
+  }
   else { $("ro-range").textContent = "—"; $("ro-range-sub").textContent = RX ? "No positions yet today" : "Needs the receiver position"; }
   $("ro-unique").textContent = num(d.unique_today);
   if (ac.length){
-    const named = a => esc(a.flight || a.hex.toUpperCase());
+    const named = a => { const cs = a.flight || a.hex.toUpperCase(), air = airlineOf(a.flight); return esc(air ? `${air} (${cs})` : cs); };
     const highest = ac.filter(a => a.alt_baro != null).sort((a,b) => b.alt_baro - a.alt_baro)[0];
     const closest = RX ? ac.filter(a => a.lat != null).map(a => ({a, d: distNm(RX.lat, RX.lon, a.lat, a.lon)})).sort((x,y) => x.d - y.d)[0] : null;
     const parts = [];
     if (closest) parts.push(`Closest <b>${named(closest.a)}</b> at ${closest.d < 10 ? closest.d.toFixed(1) : closest.d.toFixed(0)} nm`);
-    if (highest) parts.push(`highest <b>${named(highest)}</b> at ${fmtAlt(highest.alt_baro)}`);
+    if (highest) parts.push(`highest <b>${named(highest)}</b> at ${fmtAlt(highest.alt_baro, true)}`);
     $("overhead-text").innerHTML = parts.join(" · ");
   } else $("overhead-text").textContent = "No aircraft in range right now.";
 
@@ -266,13 +277,13 @@ async function refreshHistory(){
   if (!rows.length){ wrap.innerHTML = `<div class="empty">No sightings in this window yet.</div>`; return; }
   const now = Date.now()/1000;
   wrap.innerHTML = `<table><thead><tr><th>Flight</th><th>First seen</th><th>Last seen</th><th class="num">Duration</th><th class="num">Highest</th><th class="num">Fastest</th></tr></thead><tbody>${
-    rows.map(r => `<tr>
-      <td class="flight">${r.flight ? esc(r.flight) : ""}<span class="hex">${esc(r.hex.toUpperCase())}</span></td>
+    rows.map(r => { const air = airlineOf(r.flight); return `<tr>
+      <td class="flight">${r.flight ? esc(r.flight) : ""}<span class="hex">${air ? esc(air) + " · " : ""}${esc(r.hex.toUpperCase())}</span></td>
       <td>${fmtDate(r.first_seen)}</td>
       <td>${now - r.last_seen < 60 ? `<span class="inrange">In range</span>` : fmtDate(r.last_seen)}</td>
       <td class="num">${fmtDur(r.last_seen - r.first_seen)}</td>
-      <td class="num"><span class="altbar" style="width:${r.max_alt ? Math.round(Math.min(r.max_alt, 45000)/45000*48) : 0}px"></span>${fmtAlt(r.max_alt)}</td>
-      <td class="num">${r.max_gs != null ? Math.round(r.max_gs) + " kt" : "—"}</td></tr>`).join("")
+      <td class="num"><span class="altbar" style="width:${r.max_alt ? Math.round(Math.min(r.max_alt, 45000)/45000*48) : 0}px"></span>${fmtAlt(r.max_alt, true)}</td>
+      <td class="num">${r.max_gs != null ? Math.round(r.max_gs) + " kt" : "—"}</td></tr>`; }).join("")
   }</tbody></table>`;
 }
 $("history-range").addEventListener("change", refreshHistory);
