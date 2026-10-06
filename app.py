@@ -19,7 +19,7 @@ import configparser, json, math, os, re, shutil, sqlite3, subprocess, sys, threa
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ---------- settings ----------
 
@@ -115,6 +115,14 @@ def configure(path=None, environ=None):
 DB_PATH = os.path.join(DATA_DIR, "history.sqlite")
 HTML_PATH = os.path.join(DATA_DIR, "dashboard.html")
 SETTINGS_HTML_PATH = os.path.join(DATA_DIR, "settings.html")
+STATIC_DIR = os.path.join(DATA_DIR, "static")
+# The only files served besides the pages. A fixed list, so no request path
+# can reach anything else on the Pi.
+STATIC_FILES = {
+    "/static/theme.js": "application/javascript",
+    "/static/dashboard.js": "application/javascript",
+    "/static/settings.js": "application/javascript",
+}
 
 LAST = {"updated": 0}
 LOCK = threading.Lock()
@@ -341,18 +349,58 @@ def read_local_aircraft():
     out = []
     for a in d.get("aircraft", []):
         flight = (a.get("flight") or "").strip() or None
+        fresh_pos = a.get("lat") is not None and a.get("lon") is not None and (a.get("seen_pos") or 0) <= POSITION_MAX_AGE
         out.append({
             "hex": a.get("hex"),
             "flight": flight,
             "alt_baro": a.get("alt_baro") if isinstance(a.get("alt_baro"), (int, float)) else None,
             "gs": a.get("gs"),
             "track": a.get("track"),
+            "lat": a.get("lat") if fresh_pos else None,
+            "lon": a.get("lon") if fresh_pos else None,
         })
     return out, d.get("messages")
 
+# ---------- geometry ----------
+
+POSITION_MAX_AGE = 60      # seconds; older positions are not plotted or counted for range
+MAX_PLAUSIBLE_NM = 450     # beyond line of sight for any ground receiver; treat as a bad position
+SECTORS = 36               # coverage is tracked in 10-degree directions
+
+def distance_nm(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
+    return 2 * 6371000 * math.asin(math.sqrt(a)) / 1852.0
+
+def bearing_deg(lat1, lon1, lat2, lon2):
+    p1, p2, dl = math.radians(lat1), math.radians(lat2), math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+def positions_from(home, aircraft):
+    """[(aircraft, distance_nm, bearing)] for aircraft with a usable position."""
+    out = []
+    if not home:
+        return out
+    for a in aircraft:
+        if a.get("lat") is None:
+            continue
+        nm = distance_nm(home[0], home[1], a["lat"], a["lon"])
+        if nm <= MAX_PLAUSIBLE_NM:
+            out.append((a, nm, bearing_deg(home[0], home[1], a["lat"], a["lon"])))
+    return out
+
+def local_day(ts):
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+def local_midnight(ts):
+    lt = time.localtime(ts)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+
 # ---------- history store ----------
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 def init_db():
     """Create or upgrade the database. PRAGMA user_version records which
@@ -385,6 +433,26 @@ def init_db():
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_hex ON sessions(hex, last_seen)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(ts)")
             conn.execute("PRAGMA user_version = 1")
+        if version < 2:
+            # 1.2: message rate and furthest position per sample, coverage by
+            # direction per day, and each day's furthest aircraft.
+            conn.execute("ALTER TABLE metrics ADD COLUMN msg_rate REAL")
+            conn.execute("ALTER TABLE metrics ADD COLUMN max_range_nm REAL")
+            conn.execute("""CREATE TABLE coverage(
+                day TEXT NOT NULL,
+                sector INTEGER NOT NULL,
+                max_nm REAL NOT NULL,
+                PRIMARY KEY (day, sector)
+            )""")
+            conn.execute("""CREATE TABLE daily(
+                day TEXT PRIMARY KEY,
+                max_range_nm REAL,
+                bearing REAL,
+                hex TEXT,
+                flight TEXT
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last ON sessions(last_seen)")
+            conn.execute("PRAGMA user_version = 2")
         conn.commit()
     finally:
         conn.close()
@@ -419,13 +487,43 @@ def upsert_sessions(conn, aircraft, now):
                 (hx, flight, now, now, alt, gs),
             )
 
-def insert_metric(conn, now, temp, count, load1):
-    conn.execute("INSERT INTO metrics(ts, temp_c, aircraft_count, load1) VALUES (?,?,?,?)", (now, temp, count, load1))
+def insert_metric(conn, now, temp, count, load1, msg_rate=None, max_range_nm=None):
+    conn.execute("INSERT INTO metrics(ts, temp_c, aircraft_count, load1, msg_rate, max_range_nm) VALUES (?,?,?,?,?,?)",
+                 (now, temp, count, load1, msg_rate, max_range_nm))
+
+def update_coverage(conn, now, positions):
+    """Keep the furthest distance heard in each 10-degree direction today,
+    and today's single furthest aircraft."""
+    day = local_day(now)
+    best = {}
+    for _, nm, brg in positions:
+        sector = int(brg // (360 / SECTORS)) % SECTORS
+        best[sector] = max(nm, best.get(sector, 0))
+    for sector, nm in best.items():
+        conn.execute("INSERT OR IGNORE INTO coverage(day, sector, max_nm) VALUES (?,?,?)", (day, sector, nm))
+        conn.execute("UPDATE coverage SET max_nm = MAX(max_nm, ?) WHERE day=? AND sector=?", (nm, day, sector))
+    if positions:
+        a, nm, brg = max(positions, key=lambda p: p[1])
+        conn.execute("INSERT OR IGNORE INTO daily(day) VALUES (?)", (day,))
+        conn.execute("UPDATE daily SET max_range_nm=?, bearing=?, hex=?, flight=? "
+                     "WHERE day=? AND (max_range_nm IS NULL OR max_range_nm < ?)",
+                     (nm, brg, a.get("hex"), a.get("flight"), day, nm))
+
+def today_summary(conn, now):
+    """Unique aircraft since local midnight, and today's furthest aircraft."""
+    unique = conn.execute("SELECT COUNT(DISTINCT hex) FROM sessions WHERE last_seen >= ?", (local_midnight(now),)).fetchone()[0]
+    row = conn.execute("SELECT max_range_nm, bearing, hex, flight FROM daily WHERE day=?", (local_day(now),)).fetchone()
+    furthest = None
+    if row and row[0] is not None:
+        furthest = {"nm": round(row[0], 1), "bearing": round(row[1]), "hex": row[2], "flight": row[3]}
+    return unique, furthest
 
 def prune(conn, now):
     cutoff = now - CFG["retain_days"] * 86400
     conn.execute("DELETE FROM sessions WHERE last_seen < ?", (cutoff,))
     conn.execute("DELETE FROM metrics WHERE ts < ?", (cutoff,))
+    conn.execute("DELETE FROM coverage WHERE day < ?", (local_day(cutoff),))
+    conn.execute("DELETE FROM daily WHERE day < ?", (local_day(cutoff),))
 
 # ---------- collector loop ----------
 
@@ -434,6 +532,11 @@ def collect_once():
     temp = read_temp()
     load1, load5, load15 = os.getloadavg()
     aircraft, messages_total = read_local_aircraft()
+    receiver = parse_readsb_stats()
+    home = (receiver["lat"], receiver["lon"]) if receiver.get("lat") is not None else None
+    positions = positions_from(home, aircraft)
+    valid_1min = receiver.get("messages_valid_1min")
+    msg_rate = round(valid_1min / 60.0, 1) if isinstance(valid_1min, (int, float)) else None
 
     snapshot = {
         "updated": now,
@@ -454,9 +557,12 @@ def collect_once():
         "adsbx_feed_active": systemctl_active("adsbexchange-feed"),
         "adsbx_mlat_active": systemctl_active("adsbexchange-mlat"),
         "mlat": mlat_from_journal(),
-        "receiver": parse_readsb_stats(),
+        "receiver": receiver,
         "aircraft": aircraft,
         "messages_total": messages_total,
+        "message_rate": msg_rate,
+        "unique_today": None,
+        "range_today": None,
     }
     with LOCK:
         LAST.clear()
@@ -465,11 +571,16 @@ def collect_once():
     conn = get_conn()
     try:
         upsert_sessions(conn, aircraft, now)
-        insert_metric(conn, now, temp, len(aircraft), load1)
+        max_range = round(max(p[1] for p in positions), 1) if positions else None
+        insert_metric(conn, now, temp, len(aircraft), load1, msg_rate, max_range)
+        update_coverage(conn, now, positions)
         prune(conn, now)
         conn.commit()
+        unique, furthest = today_summary(conn, now)
     finally:
         conn.close()
+    with LOCK:
+        LAST.update(unique_today=unique, range_today=furthest)
 
 def collector_loop():
     while True:
@@ -479,6 +590,59 @@ def collector_loop():
             with LOCK:
                 LAST["error"] = str(e)
         time.sleep(CFG["poll_interval"])
+
+# ---------- chart data ----------
+
+TYPICAL_BUCKETS = 96   # 15-minute slots across the day
+TYPICAL_DAYS = 7
+_TYPICAL_CACHE = {"at": 0.0, "day": None, "value": None}
+
+def typical_ranges(conn, now):
+    """For each 15-minute slot of the day, the lowest and highest average
+    aircraft count seen in that slot over the previous 7 days (today
+    excluded, as in graphs1090). A slot needs at least 2 days of data,
+    otherwise it is None and the dashboard draws no band there."""
+    midnight = local_midnight(now)
+    rows = conn.execute(
+        "SELECT ts, aircraft_count FROM metrics WHERE ts >= ? AND ts < ? AND aircraft_count IS NOT NULL",
+        (midnight - TYPICAL_DAYS * 86400, midnight),
+    ).fetchall()
+    sums = {}
+    for ts, count in rows:
+        lt = time.localtime(ts)
+        key = ((lt.tm_year, lt.tm_yday), (lt.tm_hour * 60 + lt.tm_min) * TYPICAL_BUCKETS // 1440)
+        s = sums.setdefault(key, [0, 0])
+        s[0] += count
+        s[1] += 1
+    per_slot = {}
+    for (day, slot), (total, n) in sums.items():
+        per_slot.setdefault(slot, []).append(total / n)
+    ranges = []
+    for slot in range(TYPICAL_BUCKETS):
+        avgs = per_slot.get(slot, [])
+        ranges.append([round(min(avgs), 1), round(max(avgs), 1)] if len(avgs) >= 2 else None)
+    return {"buckets": TYPICAL_BUCKETS, "days": len({day for day, _ in sums}), "ranges": ranges}
+
+def typical_cached(now):
+    # Scans a week of samples, so recompute at most every 10 minutes (and at midnight).
+    c = _TYPICAL_CACHE
+    if c["value"] is None or now - c["at"] > 600 or c["day"] != local_day(now):
+        conn = get_conn()
+        try:
+            c.update(value=typical_ranges(conn, now), at=now, day=local_day(now))
+        finally:
+            conn.close()
+    return c["value"]
+
+def coverage_data(conn, now):
+    """Furthest distance per 10-degree direction: today, and best of the last 7 days."""
+    today, best = [None] * SECTORS, [None] * SECTORS
+    for sector, nm in conn.execute("SELECT sector, max_nm FROM coverage WHERE day=?", (local_day(now),)):
+        today[sector] = round(nm, 1)
+    for sector, nm in conn.execute("SELECT sector, MAX(max_nm) FROM coverage WHERE day >= ? GROUP BY sector",
+                                   (local_day(now - 6 * 86400),)):
+        best[sector] = round(nm, 1)
+    return {"sectors": SECTORS, "today": today, "best": best}
 
 # ---------- settings page data ----------
 
@@ -579,9 +743,9 @@ def settings_payload():
 
 # ---------- HTTP server ----------
 
-# Pages still carry inline <script>/<style>, hence 'unsafe-inline'. Everything
-# else is locked to this server; nothing is loaded from other sites.
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+# Scripts only from this server's /static files. Styles stay 'unsafe-inline'
+# because the pages carry their CSS inline and set a few style attributes.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 class BadRequest(Exception):
@@ -597,6 +761,17 @@ def hours_param(qs, default):
     if not math.isfinite(hours) or hours <= 0:
         raise BadRequest("hours must be greater than 0")
     return min(hours, CFG["retain_days"] * 24)
+
+def step_param(qs):
+    """?step= seconds to average samples over (0 = raw samples)."""
+    raw = qs.get("step", ["0"])[0]
+    try:
+        step = int(raw)
+    except ValueError:
+        raise BadRequest("step must be a whole number of seconds")
+    if step != 0 and not 10 <= step <= 3600:
+        raise BadRequest("step must be 0 or between 10 and 3600")
+    return step
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "adsb-dashboard/" + VERSION
@@ -638,6 +813,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _static(self, path, ctype):
+        try:
+            with open(os.path.join(STATIC_DIR, os.path.basename(path)), "rb") as f:
+                body = f.read()
+        except OSError:
+            return self._json({"error": "not found"}, 404)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self._common_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         try:
             self._route()
@@ -654,6 +843,8 @@ class Handler(BaseHTTPRequestHandler):
             self._page(HTML_PATH)
         elif parsed.path == "/settings":
             self._page(SETTINGS_HTML_PATH)
+        elif parsed.path in STATIC_FILES:
+            self._static(parsed.path, STATIC_FILES[parsed.path])
         elif parsed.path == "/favicon.ico":
             self.send_response(204)
             self._common_headers()
@@ -682,15 +873,34 @@ class Handler(BaseHTTPRequestHandler):
             ])
         elif parsed.path == "/api/metrics":
             cutoff = time.time() - hours_param(qs, "6") * 3600
+            step = step_param(qs)
             conn = get_conn()
             try:
-                rows = conn.execute(
-                    "SELECT ts, temp_c, aircraft_count FROM metrics WHERE ts >= ? ORDER BY ts ASC",
-                    (cutoff,),
-                ).fetchall()
+                if step:
+                    # Averaged buckets keep a day of data to a few hundred rows.
+                    rows = conn.execute(
+                        "SELECT MAX(ts), AVG(temp_c), ROUND(AVG(aircraft_count), 1), AVG(msg_rate), MAX(max_range_nm) "
+                        "FROM metrics WHERE ts >= ? GROUP BY CAST(ts / ? AS INTEGER) ORDER BY 1 ASC",
+                        (cutoff, step),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT ts, temp_c, aircraft_count, msg_rate, max_range_nm FROM metrics WHERE ts >= ? ORDER BY ts ASC",
+                        (cutoff,),
+                    ).fetchall()
             finally:
                 conn.close()
-            self._json([{"ts": r[0], "temp_c": r[1], "aircraft_count": r[2]} for r in rows])
+            self._json([{"ts": r[0], "temp_c": r[1], "aircraft_count": r[2], "msg_rate": r[3], "max_range_nm": r[4]}
+                        for r in rows])
+        elif parsed.path == "/api/typical":
+            self._json(typical_cached(time.time()))
+        elif parsed.path == "/api/coverage":
+            conn = get_conn()
+            try:
+                data = coverage_data(conn, time.time())
+            finally:
+                conn.close()
+            self._json(data)
         else:
             self._json({"error": "not found"}, 404)
 

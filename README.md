@@ -18,18 +18,35 @@ overhead. This pulls it into one page and adds that history.
 
 ## What it shows
 
-- **System vitals** — CPU temperature, Raspberry Pi under-voltage/throttling
-  flags, uptime, load average, memory, disk, receiver gain and clock drift.
-- **Feeders** — FlightRadar24 (`fr24feed`) and ADSBExchange
-  (`adsbexchange-feed` / `adsbexchange-mlat`) connection status, aircraft
-  tracked, and MLAT peer count — each card greys out automatically if that
-  feeder isn't installed.
-- **Aircraft in range** — the live list from your receiver right now.
-- **Flight history** — every aircraft sighting (first seen, last seen,
-  duration, max altitude, max speed), logged locally and kept 30 days.
-  Filterable by last 2h / 24h / 7 days.
-- **Trends** — small sparklines for CPU temperature and aircraft count over
-  the last 6 hours.
+- **Alerts, only when something is wrong.** When all is well the page says
+  so in one quiet line. Under-voltage, throttling, a hot CPU or a feeder going
+  down appear at the top as red **WARNING** or amber **CAUTION** strips, worst
+  first, each saying what to do. This follows the "dark cockpit" idea from
+  aircraft displays: no lights when everything is normal.
+- **Aircraft in range, in context.** The current count, and whether it's
+  busier or quieter than usual for this time of day. Beside it: messages per
+  second, today's furthest aircraft and its bearing, and unique aircraft seen
+  today, plus the closest and highest aircraft right now.
+- **Traffic, last 24 hours** against the usual range for each time of day
+  over the past week (the reference band graphs1090 users know). It appears
+  after two days of data.
+- **Coverage.** The furthest position heard in each 10° direction today,
+  against your best of the past 7 days, so you can see where terrain or
+  buildings limit your antenna.
+- **This Pi and the receiver.** CPU temperature and message rate with small
+  6-hour trend lines, power, uptime, load, memory, SD card, gain, signal and
+  noise, clock drift.
+- **Feeders.** FlightRadar24 (`fr24feed`) and ADSBExchange
+  (`adsbexchange-feed` / `adsbexchange-mlat`) status, aircraft tracked and MLAT
+  peers. A card greys out if that feeder isn't installed.
+- **Flight history.** Every aircraft sighting (first seen, last seen,
+  duration, highest altitude, fastest speed), logged locally. Filter by the
+  last 2 hours, 24 hours or 7 days.
+- **Light and dark themes.** Follows your device, or pick Light or Dark; the
+  choice is remembered in that browser.
+
+Altitudes above your country's transition altitude show as flight levels
+(`FL350`); set `transition_alt` for your region.
 
 Everything auto-refreshes in the browser; no external fonts or JS libraries
 are loaded, so it keeps working even if the box's internet connection drops
@@ -133,8 +150,9 @@ The dashboard is built for a home network:
   `cors_origin` if you build something that needs access.
 - The receiver position is rounded to about 1 km on the page unless you turn
   on `show_exact_location`, so screenshots don't give away your address.
-- Pages are served with a Content Security Policy and the usual protective
-  headers, and everything shown on a page is escaped.
+- Pages are served with a Content Security Policy that only runs scripts from
+  the Pi itself (no inline scripts), plus the usual protective headers, and
+  everything shown on a page is escaped.
 - The systemd service runs as your user with a read-only view of the system
   (it can only write to its data folder) and no way to gain privileges.
 
@@ -147,8 +165,13 @@ things on top of it:
   live aircraft list.
 - `GET /api/history?hours=24` — flight sessions with `last_seen` inside the
   last N hours, newest first.
-- `GET /api/metrics?hours=6` — raw `(timestamp, temp_c, aircraft_count)`
-  samples for the trend sparklines.
+- `GET /api/metrics?hours=6&step=300` — `ts`, `temp_c`, `aircraft_count`,
+  `msg_rate` and `max_range_nm` samples. `step` (10 to 3600 seconds) averages
+  them into buckets; leave it out for raw samples.
+- `GET /api/typical` — the usual aircraft count range for each 15-minute slot
+  of the day over the past 7 days (`null` where there's under 2 days of data).
+- `GET /api/coverage` — furthest distance in nm for each 10° direction, today
+  and best of the past 7 days.
 - `GET /api/settings` — settings in effect and the station checks shown on
   the Settings page.
 

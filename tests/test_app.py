@@ -2,7 +2,7 @@
 
     python3 -m unittest discover -s tests -v
 """
-import http.client, json, os, shutil, sqlite3, sys, tempfile, threading, unittest
+import http.client, json, os, shutil, sqlite3, sys, tempfile, threading, time, unittest
 from http.server import ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -186,6 +186,22 @@ class HistoryTest(TempDataDir):
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], app.SCHEMA_VERSION)
         conn.close()
 
+    def test_version_1_database_is_upgraded_in_place(self):
+        conn = sqlite3.connect(app.DB_PATH)
+        conn.execute("CREATE TABLE sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, hex TEXT NOT NULL, flight TEXT, "
+                     "first_seen REAL NOT NULL, last_seen REAL NOT NULL, max_alt INTEGER, max_gs REAL, samples INTEGER DEFAULT 1)")
+        conn.execute("CREATE TABLE metrics(ts REAL NOT NULL, temp_c REAL, aircraft_count INTEGER, load1 REAL)")
+        conn.execute("INSERT INTO metrics VALUES (100, 50.5, 7, 0.2)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit(); conn.close()
+        app.init_db()
+        conn = app.get_conn()
+        self.assertEqual(conn.execute("SELECT ts, temp_c, aircraft_count, msg_rate, max_range_nm FROM metrics").fetchall(),
+                         [(100, 50.5, 7, None, None)])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0], 0)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        conn.close()
+
     def test_init_db_is_repeatable(self):
         app.init_db(); app.init_db()
 
@@ -217,7 +233,106 @@ class HistoryTest(TempDataDir):
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM metrics").fetchone()[0], 1)
         conn.close()
 
+# ---------- geometry and daily statistics ----------
+
+class GeometryTest(unittest.TestCase):
+    def test_distance_and_bearing(self):
+        self.assertAlmostEqual(app.distance_nm(0, 0, 1, 0), 60.04, places=1)  # one degree of latitude
+        self.assertAlmostEqual(app.bearing_deg(0, 0, 1, 0), 0)
+        self.assertAlmostEqual(app.bearing_deg(0, 0, 0, 1), 90)
+        self.assertAlmostEqual(app.bearing_deg(0, 0, -1, 0), 180)
+        self.assertAlmostEqual(app.bearing_deg(0, 0, 0, -1), 270)
+
+    def test_positions_skip_missing_and_implausible(self):
+        home = (0.0, 0.0)
+        aircraft = [{"hex": "a", "lat": 1.0, "lon": 0.0}, {"hex": "b", "lat": None, "lon": None},
+                    {"hex": "c", "lat": 0.0, "lon": 20.0}]  # ~1200 nm away
+        got = app.positions_from(home, aircraft)
+        self.assertEqual([p[0]["hex"] for p in got], ["a"])
+        self.assertEqual(app.positions_from(None, aircraft), [])
+
+class ReadsbPositionTest(TempDataDir):
+    def test_stale_position_is_dropped(self):
+        os.makedirs(os.path.join(self.tmp, "rb"))
+        with open(os.path.join(self.tmp, "rb", "aircraft.json"), "w") as f:
+            json.dump({"aircraft": [{"hex": "a", "lat": 1, "lon": 2, "seen_pos": 5},
+                                    {"hex": "b", "lat": 1, "lon": 2, "seen_pos": 300}]}, f)
+        self.configure(env={"ADSB_READSB_DIR": os.path.join(self.tmp, "rb")})
+        aircraft, _ = app.read_local_aircraft()
+        self.assertEqual([(a["hex"], a["lat"]) for a in aircraft], [("a", 1), ("b", None)])
+
+class DailyStatsTest(TempDataDir):
+    def setUp(self):
+        super().setUp()
+        app.init_db()
+        self.conn = app.get_conn()
+        self.now = time.mktime((2026, 10, 6, 14, 0, 0, 0, 0, -1))  # 14:00 local
+
+    def tearDown(self):
+        self.conn.close()
+        super().tearDown()
+
+    def test_coverage_keeps_the_furthest_per_direction(self):
+        north = {"hex": "n1", "flight": "MAS1"}
+        app.update_coverage(self.conn, self.now, [(north, 120.0, 5.0), ({"hex": "e1", "flight": None}, 80.0, 95.0)])
+        app.update_coverage(self.conn, self.now, [(north, 100.0, 6.0), ({"hex": "n2", "flight": "AXM2"}, 150.0, 9.9)])
+        cov = app.coverage_data(self.conn, self.now)
+        self.assertEqual(len(cov["today"]), 36)
+        self.assertEqual(cov["today"][0], 150.0)
+        self.assertEqual(cov["today"][9], 80.0)
+        self.assertIsNone(cov["today"][18])
+        self.assertEqual(cov["best"], cov["today"])
+
+    def test_best_includes_earlier_days(self):
+        app.update_coverage(self.conn, self.now - 2 * 86400, [({"hex": "x"}, 200.0, 185.0)])
+        app.update_coverage(self.conn, self.now - 10 * 86400, [({"hex": "y"}, 300.0, 185.0)])  # older than 7 days
+        cov = app.coverage_data(self.conn, self.now)
+        self.assertIsNone(cov["today"][18])
+        self.assertEqual(cov["best"][18], 200.0)
+
+    def test_today_summary(self):
+        app.upsert_sessions(self.conn, [{"hex": "a"}, {"hex": "b"}], self.now - 60)
+        app.upsert_sessions(self.conn, [{"hex": "a"}], self.now)
+        app.upsert_sessions(self.conn, [{"hex": "old"}], self.now - 86400)  # yesterday
+        app.update_coverage(self.conn, self.now, [({"hex": "a", "flight": "MAS1"}, 90.0, 270.4), ({"hex": "b", "flight": None}, 40.0, 10.0)])
+        unique, furthest = app.today_summary(self.conn, self.now)
+        self.assertEqual(unique, 2)
+        self.assertEqual(furthest, {"nm": 90.0, "bearing": 270, "hex": "a", "flight": "MAS1"})
+
+    def test_no_furthest_without_positions(self):
+        self.assertEqual(app.today_summary(self.conn, self.now), (0, None))
+
+    def test_typical_ranges_need_two_days(self):
+        midnight = app.local_midnight(self.now)
+        slot = 40  # 10:00-10:15
+        for days_ago, counts in ((1, [10, 12]), (2, [20, 22]), (3, [30, 30])):
+            for i, c in enumerate(counts):
+                app.insert_metric(self.conn, midnight - days_ago * 86400 + slot * 900 + i * 60, 50, c, 0.1)
+        app.insert_metric(self.conn, midnight - 86400 + 41 * 900, 50, 5, 0.1)  # only one day in slot 41
+        app.insert_metric(self.conn, midnight + slot * 900, 50, 99, 0.1)  # today: excluded
+        t = app.typical_ranges(self.conn, self.now)
+        self.assertEqual(t["buckets"], 96)
+        self.assertEqual(t["days"], 3)
+        self.assertEqual(t["ranges"][slot], [11.0, 30.0])
+        self.assertIsNone(t["ranges"][41])
+        self.assertIsNone(t["ranges"][0])
+
+    def test_prune_drops_old_coverage(self):
+        app.update_coverage(self.conn, self.now - 40 * 86400, [({"hex": "x"}, 100.0, 0.0)])
+        app.update_coverage(self.conn, self.now, [({"hex": "y"}, 100.0, 0.0)])
+        app.prune(self.conn, self.now)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM daily").fetchone()[0], 1)
+
 # ---------- query validation ----------
+
+class StepParamTest(unittest.TestCase):
+    def test_step(self):
+        self.assertEqual(app.step_param({}), 0)
+        self.assertEqual(app.step_param({"step": ["300"]}), 300)
+        for bad in ("5", "99999", "abc", "1.5"):
+            with self.assertRaises(app.BadRequest, msg=bad):
+                app.step_param({"step": [bad]})
 
 class HoursParamTest(TempDataDir):
     def test_valid_and_capped(self):
@@ -237,12 +352,16 @@ class HttpTest(TempDataDir):
         super().setUp()
         for name in ("dashboard.html", "settings.html"):
             shutil.copy(os.path.join(ROOT, name), self.tmp)
+        shutil.copytree(os.path.join(ROOT, "static"), os.path.join(self.tmp, "static"))
+        self.saved_static = app.STATIC_DIR
+        app.STATIC_DIR = os.path.join(self.tmp, "static")
         app.init_db()
         app.collect_once()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def tearDown(self):
+        app.STATIC_DIR = self.saved_static
         self.server.shutdown()
         self.server.server_close()
         super().tearDown()
@@ -257,7 +376,10 @@ class HttpTest(TempDataDir):
 
     def test_pages_and_api_routes(self):
         for path, status in [("/", 200), ("/settings", 200), ("/api/status", 200), ("/api/settings", 200),
-                             ("/api/history?hours=2", 200), ("/api/metrics", 200), ("/nope", 404), ("/../app.py", 404)]:
+                             ("/api/history?hours=2", 200), ("/api/metrics", 200), ("/api/metrics?hours=24&step=300", 200),
+                             ("/api/metrics?step=1", 400), ("/api/typical", 200), ("/api/coverage", 200),
+                             ("/static/dashboard.js", 200), ("/static/theme.js", 200), ("/static/settings.js", 200),
+                             ("/static/../app.py", 404), ("/static/app.py", 404), ("/nope", 404), ("/../app.py", 404)]:
             self.assertEqual(self.get(path)[0], status, path)
 
     def test_status_contents(self):
@@ -265,6 +387,10 @@ class HttpTest(TempDataDir):
         d = json.loads(body)
         self.assertEqual(len(d["aircraft"]), 3)
         self.assertEqual(d["station"], {"transition_alt": 18000, "show_exact_location": False})
+        self.assertEqual(d["message_rate"], round(61234 / 60.0, 1))
+        self.assertEqual(d["unique_today"], 3)
+        self.assertEqual(d["range_today"]["hex"], "750606")  # the only fixture aircraft with a position
+        self.assertEqual(d["aircraft"][0]["lat"], 3.9)
         self.assertEqual(d["version"], app.VERSION)
 
     def test_history_records_sightings(self):
@@ -275,6 +401,19 @@ class HttpTest(TempDataDir):
         status, _, body = self.get("/api/history?hours=abc")
         self.assertEqual(status, 400)
         self.assertIn("hours", json.loads(body)["error"])
+
+    def test_static_files(self):
+        status, h, body = self.get("/static/dashboard.js")
+        self.assertTrue(h["content-type"].startswith("application/javascript"))
+        self.assertIn(b"refreshStatus", body)
+
+    def test_scripts_only_from_this_server(self):
+        _, h, _ = self.get("/")
+        self.assertIn("script-src 'self';", h["content-security-policy"])
+        self.assertNotIn("script-src 'self' 'unsafe-inline'", h["content-security-policy"])
+        for page in ("dashboard.html", "settings.html"):
+            with open(os.path.join(ROOT, page)) as f:
+                self.assertNotIn("<script>", f.read(), page)  # inline scripts would be blocked by the CSP
 
     def test_security_headers(self):
         _, h, _ = self.get("/")

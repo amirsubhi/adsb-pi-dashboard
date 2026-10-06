@@ -4,22 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings · ADS-B Ground Station</title>
+<script src="/static/theme.js"></script>
 <style>
   :root{
     --page:#f3f5f8; --surface:#ffffff; --ink:#121820; --ink-soft:#4e5a68; --ink-mute:#7a8594;
-    --line:#dfe3e9; --accent:#2a78d6; --accent-soft:#e7f0fb;
+    --line:#dfe3e9; --line-strong:#c5ccd6; --surface-2:#eef1f5; --accent:#2a78d6; --accent-soft:#e7f0fb;
     --good:#0a8f0a; --warning:#b98100; --warning-soft:#fdf4dc; --critical:#d03b3b; --critical-soft:#fbe9e9;
     --font-body:-apple-system,"Segoe UI",system-ui,sans-serif;
     --font-data:ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
     color-scheme: light;
   }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --page:#0a0e13; --surface:#121922; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
-      --line:#232e3b; --accent:#5b9bec; --accent-soft:#182536;
-      --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
-      color-scheme: dark;
-    }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --page:#0a0e13; --surface:#121922; --surface-2:#18212c; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
+    --line:#232e3b; --line-strong:#34465a; --accent:#5b9bec; --accent-soft:#182536;
+    --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
+    color-scheme: dark;
+  } }
+  :root[data-theme="dark"]{
+    --page:#0a0e13; --surface:#121922; --surface-2:#18212c; --ink:#e9edf2; --ink-soft:#9fabba; --ink-mute:#6f7c8b;
+    --line:#232e3b; --line-strong:#34465a; --accent:#5b9bec; --accent-soft:#182536;
+    --good:#3fc23f; --warning:#fab219; --warning-soft:#2a2210; --critical:#e2615f; --critical-soft:#2a1618;
+    color-scheme: dark;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;}
@@ -28,7 +33,12 @@
   h1,h2,p{margin:0;}
   a{color:var(--accent);}
   code,.mono{font-family:var(--font-data);font-size:.92em;}
-  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px;}
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px;}
+  .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:7px;overflow:hidden;background:var(--surface);}
+  .seg button{background:transparent;border:0;border-left:1px solid var(--line);color:var(--ink-soft);font:500 12px var(--font-body);padding:5px 10px;cursor:pointer;}
+  .seg button:first-child{border-left:0;}
+  .seg button:hover{background:var(--surface-2);color:var(--ink);}
+  .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);}
   .eyebrow{font-family:var(--font-data);font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:6px;}
   header h1{font-family:var(--font-data);font-size:1.5rem;font-weight:600;}
   .where{margin-top:6px;font-size:.86rem;color:var(--ink-soft);}
@@ -61,7 +71,7 @@
   td.opt .desc{color:var(--ink-soft);margin-top:3px;}
   td.val{font-family:var(--font-data);overflow-wrap:anywhere;}
   td.val .unset{color:var(--ink-mute);font-family:var(--font-body);}
-  td.val .src{display:table;margin-top:5px;font-family:var(--font-body);}
+  td.val .src-row{margin-top:5px;font-family:var(--font-body);}
   @media (max-width:600px){ td.opt{width:auto;} td.opt .env{display:block;margin:2px 0 0;} }
   .src{display:inline-block;font-size:.75rem;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--ink-mute);white-space:nowrap;}
   .src.file{color:var(--accent);border-color:var(--accent);}
@@ -85,9 +95,14 @@
 <body>
 
 <header>
-  <p class="eyebrow">readsb / dump1090</p>
-  <h1>Settings</h1>
-  <p class="where"><a href="/">Dashboard</a> · Settings</p>
+  <div>
+    <p class="eyebrow">readsb / dump1090</p>
+    <h1>Settings</h1>
+    <p class="where"><a href="/">Dashboard</a> · Settings</p>
+  </div>
+  <div class="seg theme" role="group" aria-label="Theme">
+    <button data-t="auto" aria-pressed="true">Auto</button><button data-t="light" aria-pressed="false">Light</button><button data-t="dark" aria-pressed="false">Dark</button>
+  </div>
 </header>
 
 <div id="problems" class="problems" aria-live="polite"></div>
@@ -127,52 +142,6 @@
   <dl class="about" id="about"></dl>
 </section>
 
-<script>
-const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const SRC = {"settings.ini": ["file", "settings.ini"], "environment": ["env", "environment"], "default": ["", "default"]};
-
-function fmtValue(row){
-  const v = row.value;
-  if (v === null || v === "") return '<span class="unset">not set</span>';
-  if (row.type === "bool") return v ? "yes" : "no";
-  return esc(v);
-}
-
-async function load(){
-  let d;
-  try { d = await (await fetch("/api/settings")).json(); }
-  catch(e){ $("checks").innerHTML = '<li class="empty">Could not reach the dashboard service.</li>'; return; }
-
-  $("problems").innerHTML = d.errors.map(e => `<div class="problem"><b>CAUTION</b>${esc(e)}</div>`).join("");
-
-  $("checks").innerHTML = d.checks.map(c =>
-    `<li class="${esc(c.state)}"><span class="dot" aria-hidden="true"></span><span class="name">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`
-  ).join("");
-
-  $("settings-path").textContent = d.settings_file;
-  $("cmd-edit").textContent = "nano " + d.settings_file;
-  $("settings-rows").innerHTML = d.settings.map(r => {
-    const [cls, label] = SRC[r.source] || ["", r.source];
-    return `<tr><td class="opt"><span class="key">${esc(r.key)}</span><span class="env">${esc(r.env)}</span>` +
-      `<div class="desc">${esc(r.description)}</div></td>` +
-      `<td class="val">${fmtValue(r)}<span class="src ${cls}">${label}</span></td></tr>`;
-  }).join("");
-
-  $("about").innerHTML = [
-    ["Version", d.version], ["Python", d.python], ["Data folder", d.data_dir],
-    ["Settings file", d.settings_file + (d.settings_file_exists ? "" : " (not created yet, so defaults apply)")],
-  ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
-}
-
-document.querySelectorAll("[data-copy]").forEach(btn => btn.addEventListener("click", async () => {
-  const text = $(btn.dataset.copy).textContent;
-  try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
-  catch(e){ const r = document.createRange(); r.selectNodeContents($(btn.dataset.copy)); getSelection().removeAllRanges(); getSelection().addRange(r); btn.textContent = "Selected"; }
-  setTimeout(() => btn.textContent = "Copy", 1500);
-}));
-
-load();
-</script>
+<script src="/static/settings.js"></script>
 </body>
 </html>
