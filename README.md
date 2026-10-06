@@ -59,8 +59,11 @@ everything is still working.
 </picture>
 
 On a normal day one line says all checks are normal. Under-voltage, CPU
-throttling, overheating or a feeder going down appear as warnings at the top,
-worst first, each saying what to do, and the affected card turns red.
+throttling, overheating, a stalled receiver or a feeder going down appear as
+warnings at the top, worst first, each saying what to do, and the affected
+card turns red. A feeder has to stay down for a minute or two before it
+raises an alarm, so a restart or a dropped connection that recovers on its
+own stays quiet, and feeder alarms are held back for five minutes after boot.
 
 ### Feeders
 
@@ -189,21 +192,28 @@ python3 app.py
 ### Reading the dashboard
 
 When everything is fine, the line under the header reads *All checks normal:
-power, temperature and feeders.* Otherwise one strip appears per problem,
-worst first:
+power, temperature, receiver and feeders.* Otherwise one strip appears per
+problem, warnings first. "After" is how long a problem must last before it
+shows:
 
-| Strip | Meaning | What to do |
-|---|---|---|
-| WARNING · Under-voltage now | The Pi isn't getting enough power right now | Use a proper 5 V / 3 A supply and a short, thick cable |
-| WARNING · CPU is being throttled | The firmware has slowed the CPU | Check power and cooling |
-| WARNING · FlightRadar24 feed disconnected | fr24feed has lost your receiver | `systemctl status fr24feed`, and check readsb is running |
-| WARNING · ADSBExchange feed is down | The `adsbexchange-feed` service has stopped | `sudo systemctl restart adsbexchange-feed`, then `journalctl -u adsbexchange-feed` |
-| CAUTION · CPU at 75 °C | Running hot (75 °C or more) | Add a heatsink or fan, or improve airflow |
-| CAUTION · CPU running warm | 70 °C or more | Keep an eye on it, especially in hot weather |
-| CAUTION · Power dipped earlier this boot | Under-voltage happened since the last reboot | Same as under-voltage; it may come back |
+| Strip | Meaning | After | What to do |
+|---|---|---|---|
+| WARNING · Under-voltage now | The Pi isn't getting enough power right now | at once | Use a proper 5 V / 3 A supply and a short, thick cable |
+| WARNING · CPU is being throttled | The firmware has slowed the CPU | at once | Check power and cooling |
+| WARNING · No data from the receiver | readsb hasn't updated `aircraft.json` for a minute, or it isn't there | 1 min | `systemctl status readsb`; check the dongle is plugged in (`lsusb`) |
+| WARNING · FlightRadar24 feed is down | fr24feed is stopped, has no link to FlightRadar24, or gets nothing from the receiver; the strip says which | 2 min | `sudo systemctl restart fr24feed`, then `fr24feed-status` |
+| WARNING · ADSBExchange feed is down | The `adsbexchange-feed` service is stopped, failed or keeps restarting | 90 s | `sudo systemctl restart adsbexchange-feed`, then `journalctl -u adsbexchange-feed` |
+| CAUTION · FlightRadar24 / ADSBExchange MLAT isn't working | The feed works but MLAT doesn't (not running, not connected, or no report for 30 minutes) | 10 min | `journalctl -u adsbexchange-mlat`, or `fr24feed-status` for FR24 |
+| CAUTION · CPU at 75 °C | Running hot (75 °C or more) | at once | Add a heatsink or fan, or improve airflow |
+| CAUTION · CPU running warm | 70 °C or more | at once | Keep an eye on it, especially in hot weather |
+| CAUTION · Power dipped earlier this boot | Under-voltage happened since the last reboot | at once | Same as under-voltage; it may come back |
+| CAUTION · SD card nearly full | Less than 1 GB free, or more than 90 % used | at once | Clear old logs (`sudo journalctl --vacuum-size=100M`) or lower `retain_days` |
+| CAUTION · The collector hit an error | Reading the Pi's status failed, so figures may be old | at once | `journalctl -u adsb-dashboard` |
 
-**Feeder cards.** A green dot means the feeder is running; a red border and
-"Feed down" or "Disconnected" mean it isn't. MLAT figures that stay at zero
+**Feeder cards.** Green "Feeding" means the feed is working; amber "MLAT off"
+means it feeds but MLAT doesn't; red "Down" or "Stopped" means nothing is
+reaching that site, with the reason under the name. The card changes straight
+away; the alert strip waits as in the table above. MLAT figures that stay at zero
 while the feed runs usually mean the MLAT client can't sync; check
 `journalctl -u adsbexchange-mlat`.
 

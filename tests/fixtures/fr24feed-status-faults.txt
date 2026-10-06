@@ -1,0 +1,7 @@
+[ ok ] FR24 Feeder/Decoder Process: running.
+[ ok ] FR24 Stats Timestamp: 2026-10-06 08:20:11.
+[FAIL] FR24 Link: connecting ... failed!
+[ ok ] FR24 Radar: T-WMKK214.
+[ ok ] FR24 Tracked AC: 0.
+[FAIL] Receiver: down ... failed!
+[FAIL] FR24 MLAT: not running ... failed!

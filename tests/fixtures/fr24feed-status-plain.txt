@@ -1,0 +1,7 @@
+FR24 Feeder/Decoder Process: running.
+FR24 Stats Timestamp: 2026-10-06 08:14:02.
+FR24 Link: connected [UDP].
+FR24 Radar: T-WMKK214.
+FR24 Tracked AC: 12.
+Receiver: connected.
+FR24 MLAT: ok [UDP].

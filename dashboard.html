@@ -149,6 +149,7 @@
   .state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good);}
   .state.down{color:var(--critical);font-weight:600;} .state.down::before{background:var(--critical);}
   .state.off::before{background:var(--ink-mute);}
+  .state.warn{color:var(--warning);font-weight:600;} .state.warn::before{background:var(--warning);}
   .feeder-id{font-size:.8rem;color:var(--ink-mute);margin:3px 0 10px;}
   .feeder .kv > div{grid-template-columns:minmax(0,1fr) auto;}
   .feeder .kv > div:last-child{border-bottom:0;}
@@ -242,12 +243,12 @@
       <dl class="kv">
         <div><dt>Aircraft tracked</dt><dd id="fr24-ac">—</dd></div>
         <div><dt>Messages relayed</dt><dd id="fr24-msgs">—</dd></div>
-        <div><dt>MLAT sync count</dt><dd id="fr24-sync">—</dd></div>
+        <div><dt>MLAT</dt><dd id="fr24-mlat">—</dd></div>
       </dl>
     </div>
     <div class="feeder" id="adsbx-card">
       <div class="feeder-head"><h3>ADSBExchange</h3><span id="adsbx-state" class="state off">Checking</span></div>
-      <div class="feeder-id">adsbexchange-feed · adsbexchange-mlat</div>
+      <div class="feeder-id" id="adsbx-id">adsbexchange-feed · adsbexchange-mlat</div>
       <dl class="kv">
         <div><dt>Aircraft with position</dt><dd id="adsbx-ac">—</dd></div>
         <div><dt>MLAT peers</dt><dd id="mlat-peers">—</dd></div>

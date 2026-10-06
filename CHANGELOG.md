@@ -4,6 +4,24 @@ Notable changes to the dashboard. To update an installed copy, pull and run
 `./install.sh` again; settings and history are kept and the database is
 upgraded in place.
 
+## 1.4.0: Feeder alerts you can trust
+
+- Fixed: a stopped fr24feed showed as running, because "not running" contains
+  "running". The fr24feed-status output is now read line by line, with or
+  without the `[ ok ]` / `[FAIL]` markers.
+- Fixed: losing the link to FlightRadar24 went unnoticed while fr24feed
+  still read the receiver. The card and alerts now check the link, the
+  receiver and MLAT separately.
+- Fixed: ADSBExchange MLAT figures could come from a log line hours old. Only
+  the last 30 minutes count now, and the MLAT service state is checked.
+- New alerts: no data from the receiver (readsb stalled for a minute), MLAT
+  not working (FlightRadar24 or ADSBExchange), SD card nearly full, and
+  collector errors.
+- Feeder alerts wait out short blips (90 s to 2 min, 10 min for MLAT) and stay
+  quiet for five minutes after boot, so restarts don't raise false alarms.
+  The alert logic now lives in `app.py`; `/api/status` has new `alerts` and
+  `feeders` fields.
+
 ## 1.3.0: Live map
 
 - New live map at `/map`: aircraft move smoothly between updates, coloured by

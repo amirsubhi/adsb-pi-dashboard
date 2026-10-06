@@ -19,7 +19,7 @@ import configparser, json, math, os, re, shutil, sqlite3, subprocess, sys, threa
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # ---------- settings ----------
 
@@ -235,7 +235,7 @@ def read_meminfo():
 def read_disk():
     try:
         u = shutil.disk_usage("/")
-        return {"total_gb": round(u.total / 1e9, 1), "used_gb": round(u.used / 1e9, 1)}
+        return {"total_gb": round(u.total / 1e9, 1), "used_gb": round(u.used / 1e9, 1), "free_gb": round(u.free / 1e9, 1)}
     except Exception:
         return {}
 
@@ -271,34 +271,73 @@ def undervoltage_last_event():
 
 # ---------- fr24feed (optional) ----------
 
+# fr24feed-status prints one line per check, with Debian's "[ ok ]" / "[FAIL]"
+# markers when the lsb helpers are installed and none otherwise, e.g.
+#   [ ok ] FR24 Link: connected [TCP].
+#   [FAIL] FR24 Feeder/Decoder Process: not running ... failed!
+# Each line is read on its own so a wording we haven't seen leaves a field
+# blank instead of making a failure look healthy.
+_FR24_LINE = re.compile(r"^\s*(?:\[\s*([A-Za-z.]+)\s*\]\s*)?([A-Za-z0-9 /]+?):\s*(.*?)\s*$")
+
+def _fr24_lines(out):
+    lines = {}
+    for line in out.splitlines():
+        m = _FR24_LINE.match(line)
+        if not m:
+            continue
+        value = re.sub(r"\s*\.\.\.\s*failed!?$", "", m.group(3)).rstrip(".").strip()
+        marker = (m.group(1) or "").lower()
+        lines[m.group(2).strip().lower()] = ("fail" if marker == "fail" else "ok" if marker == "ok" else "", value)
+    return lines
+
 def parse_fr24_text(out):
-    d = {"running": "running" in out}
-    m = re.search(r"FR24 Link:\s*(\w+)\s*\[(\w+)\]", out)
-    if m:
-        d["link_status"] = m.group(1)
-        d["link_type"] = m.group(2)
-    m = re.search(r"FR24 Radar:\s*(\S+)", out)
-    if m:
-        d["radar_id"] = m.group(1).rstrip(".")
-    m = re.search(r"FR24 Tracked AC:\s*(\d+)", out)
+    """What fr24feed-status says, field by field. "running" is only true
+    when the process line says so (it used to match "not running" too)."""
+    lines = _fr24_lines(out)
+    d = {"running": False}
+    marker, value = lines.get("fr24 feeder/decoder process", ("", ""))
+    d["running"] = marker != "fail" and value.lower().startswith("running")
+    if "fr24 link" in lines:
+        marker, value = lines["fr24 link"]
+        m = re.match(r"([^\[]*?)\s*(?:\[(\w+)\])?$", value)
+        d["link_status"] = (m.group(1) if m else value).lower() or "unknown"
+        if m and m.group(2):
+            d["link_type"] = m.group(2)
+        if marker == "fail":
+            d["link_status"] = d["link_status"] if d["link_status"] != "connected" else "failed"
+    if "fr24 radar" in lines:
+        d["radar_id"] = lines["fr24 radar"][1]
+    m = re.match(r"(\d+)", lines.get("fr24 tracked ac", ("", ""))[1])
     if m:
         d["tracked_ac"] = int(m.group(1))
-    m = re.search(r"Receiver:\s*(\w+)\s*\((\d+)\s*MSGS/(\d+)\s*SYNC\)", out)
+    if "receiver" in lines:
+        marker, value = lines["receiver"]
+        m = re.match(r"(\w+)(?:\s*\((\d+)\s*MSGS/(\d+)\s*SYNC\))?", value)
+        d["receiver_status"] = m.group(1).lower() if m else "unknown"
+        if marker == "fail" and d["receiver_status"] == "connected":
+            d["receiver_status"] = "failed"
+        if m and m.group(2):
+            d["msgs"], d["sync"] = int(m.group(2)), int(m.group(3))
+    if "fr24 mlat" in lines:
+        marker, value = lines["fr24 mlat"]
+        d["mlat_status"] = "ok" if marker != "fail" and value.lower().startswith("ok") else (value.split(" [")[0].lower() or "unknown")
+    m = re.match(r"(\d+)", lines.get("fr24 mlat ac seen", ("", ""))[1])
     if m:
-        d["receiver_status"] = m.group(1)
-        d["msgs"] = int(m.group(2))
-        d["sync"] = int(m.group(3))
+        d["mlat_ac"] = int(m.group(1))
     return d
 
 def parse_fr24():
-    """Parses `fr24feed-status`. Returns {"running": False} if fr24feed
-    isn't installed - the dashboard hides the FlightRadar24 card in that
-    case."""
+    """Parses `fr24feed-status`. "installed" is False when the command
+    doesn't exist, and the dashboard then shows the card as not installed."""
     try:
         out = subprocess.run(["fr24feed-status"], capture_output=True, text=True, timeout=5).stdout
+    except FileNotFoundError:
+        return {"installed": False, "running": False}
     except Exception:
-        return {"running": False}
-    return parse_fr24_text(out)
+        return {"installed": True, "running": False}
+    d = parse_fr24_text(out)
+    d["installed"] = True
+    return d
 
 # ---------- readsb / adsbexchange-feed local JSON (optional) ----------
 
@@ -374,12 +413,17 @@ def parse_mlat_lines(lines):
         m = re.search(r"peer_count:\s*(\d+)", line)
         if m:
             d["peer_count"] = int(m.group(1))
+        m = re.search(r"^Server:\s*(\w+)", line)
+        if m:
+            d["server_status"] = m.group(1)
     return d
+
+MLAT_LOG_WINDOW = "-30min"  # mlat-client logs a status summary every several minutes; older lines say nothing about now
 
 def mlat_from_journal():
     try:
         out = subprocess.run(
-            ["journalctl", "-u", "adsbexchange-mlat", "-n", "30", "--no-pager", "-o", "cat"],
+            ["journalctl", "-u", "adsbexchange-mlat", "--since", MLAT_LOG_WINDOW, "-n", "30", "--no-pager", "-o", "cat"],
             capture_output=True, text=True, timeout=5,
         ).stdout.splitlines()
     except Exception:
@@ -404,6 +448,14 @@ def read_local_aircraft():
             "lon": a.get("lon") if fresh_pos else None,
         })
     return out, d.get("messages")
+
+def receiver_age(now):
+    """Seconds since readsb last wrote aircraft.json, from the "now" field
+    inside it. None when there is no file to read."""
+    d = read_json(os.path.join(CFG["readsb_dir"], "aircraft.json"))
+    if not d or not isinstance(d.get("now"), (int, float)):
+        return None
+    return max(0.0, round(now - d["now"], 1))
 
 # ---------- geometry ----------
 
@@ -569,6 +621,106 @@ def prune(conn, now):
     conn.execute("DELETE FROM coverage WHERE day < ?", (local_day(cutoff),))
     conn.execute("DELETE FROM daily WHERE day < ?", (local_day(cutoff),))
 
+# ---------- station health: feeder states and alerts ----------
+
+RECEIVER_STALE_AFTER = 60   # seconds without a fresh aircraft.json
+BOOT_GRACE = 300            # feeders take a few minutes to connect after a reboot
+DISK_FREE_MIN_GB = 1.0
+DISK_USED_MAX = 0.90
+_BAD_SINCE = {}             # alert id -> when the condition was first seen
+
+def feeder_states(snap):
+    """One word per feeder and the receiver: ok, degraded (feeding but MLAT
+    isn't working), down, stopped or absent (not installed), plus the reason
+    the dashboard shows under it."""
+    fr = snap.get("fr24") or {}
+    if not fr.get("installed", fr.get("running")):
+        fr24 = ("absent", "fr24feed not installed")
+    elif not fr.get("running"):
+        fr24 = ("stopped", "fr24feed is not running")
+    elif fr.get("link_status") != "connected":
+        fr24 = ("down", "No link to FlightRadar24 (%s)" % (fr.get("link_status") or "no status"))
+    elif fr.get("receiver_status") != "connected":
+        fr24 = ("down", "fr24feed gets no data from the receiver")
+    elif fr.get("mlat_status") not in (None, "ok"):
+        fr24 = ("degraded", "Feeding; MLAT %s" % fr["mlat_status"])
+    else:
+        fr24 = ("ok", "Feeding")
+
+    feed, mlat_unit, mlat = snap.get("adsbx_feed_active"), snap.get("adsbx_mlat_active"), snap.get("mlat") or {}
+    if feed in (None, "unknown"):
+        adsbx = ("absent", "adsbexchange-feed not installed")
+    elif feed == "inactive":
+        adsbx = ("stopped", "adsbexchange-feed is stopped")
+    elif feed != "active":
+        adsbx = ("down", "adsbexchange-feed %s" % {"failed": "has failed", "activating": "keeps restarting"}.get(feed, "is " + feed))
+    elif mlat_unit not in ("unknown", "active"):
+        adsbx = ("degraded", "Feeding; adsbexchange-mlat %s" % {"failed": "has failed", "inactive": "is stopped"}.get(mlat_unit, "is " + mlat_unit))
+    elif mlat_unit == "active" and not mlat:
+        adsbx = ("degraded", "Feeding; no MLAT report in the last 30 minutes")
+    elif mlat.get("receiver_status") not in (None, "connected") or mlat.get("server_status") not in (None, "connected"):
+        adsbx = ("degraded", "Feeding; MLAT not connected")
+    else:
+        adsbx = ("ok", "Feeding")
+
+    age = snap.get("receiver_age_s")
+    if age is None:
+        receiver = ("absent", "No aircraft.json in %s" % CFG["readsb_dir"])
+    elif age > RECEIVER_STALE_AFTER:
+        receiver = ("down", "readsb hasn't updated for %d s" % age)
+    else:
+        receiver = ("ok", "Receiving")
+    return {k: {"state": v[0], "detail": v[1]} for k, v in (("fr24", fr24), ("adsbx", adsbx), ("receiver", receiver))}
+
+def health_alerts(snap, bad_since, now):
+    """Alerts for the annunciator, worst first. Feeder and receiver problems
+    must last a while before they count (a restart or a dropped connection
+    that recovers is not worth an alarm), and are held back entirely for the
+    first minutes after boot. bad_since remembers when each one started."""
+    t, feeders, temp, disk = snap.get("throttled") or {}, snap.get("feeders") or {}, snap.get("temp_c"), snap.get("disk") or {}
+    booting = (snap.get("uptime_s") or BOOT_GRACE) < BOOT_GRACE
+    # (id, level, text, seconds it must last; None = not subject to boot grace)
+    found = []
+    if t.get("undervoltage_now"):
+        found.append(("power", "warning", "Under-voltage now. Check the power supply and cable.", None))
+    if t.get("throttled_now"):
+        found.append(("throttled", "warning", "CPU is being throttled.", None))
+    rx = feeders.get("receiver", {})
+    if rx.get("state") == "down":
+        found.append(("receiver", "warning", "No data from the receiver: %s." % rx["detail"], 0))
+    elif rx.get("state") == "absent":
+        found.append(("receiver", "warning", "No data from the receiver. %s." % rx["detail"], RECEIVER_STALE_AFTER))
+    for key, name, delay in (("fr24", "FlightRadar24", 120), ("adsbx", "ADSBExchange", 90)):
+        f = feeders.get(key, {})
+        detail = re.sub(r"^MLAT ", "", f.get("detail", "").split("; ", 1)[-1])
+        if detail[1:2].islower():  # "No link..." reads as "no link..." mid-sentence; "MLAT ..." stays
+            detail = detail[:1].lower() + detail[1:]
+        if f.get("state") in ("down", "stopped"):
+            found.append((key, "warning", "%s feed is down: %s." % (name, detail), delay))
+        elif f.get("state") == "degraded":
+            found.append((key + "-mlat", "caution", "%s MLAT isn't working: %s." % (name, detail), 600))
+    if temp is not None and temp >= 75:
+        found.append(("temp", "caution", "CPU at %.0f °C. Check cooling." % temp, None))
+    elif temp is not None and temp >= 70:
+        found.append(("temp", "caution", "CPU running warm at %.0f °C." % temp, None))
+    if not t.get("undervoltage_now") and t.get("undervoltage_occurred"):
+        last = snap.get("undervoltage_last_event")
+        found.append(("power-earlier", "caution", "Power dipped earlier this boot%s." % (" (last at %s)" % last if last else ""), None))
+    if disk.get("free_gb") is not None and (disk["free_gb"] < DISK_FREE_MIN_GB or disk.get("total_gb") and disk["used_gb"] / disk["total_gb"] > DISK_USED_MAX):
+        found.append(("disk", "caution", "SD card nearly full: %.1f GB free." % disk["free_gb"], None))
+
+    ids = {f[0] for f in found}
+    for gone in [k for k in bad_since if k not in ids]:
+        del bad_since[gone]
+    alerts = []
+    for aid, level, text, delay in found:
+        since = bad_since.setdefault(aid, now)
+        if delay is not None and (booting or now - since < delay):
+            continue
+        alerts.append({"id": aid, "level": level, "text": text, "since": since})
+    alerts.sort(key=lambda a: a["level"] != "warning")  # stable: warnings first, in the order above
+    return alerts
+
 # ---------- collector loop ----------
 
 def collect_once():
@@ -602,12 +754,15 @@ def collect_once():
         "adsbx_mlat_active": systemctl_active("adsbexchange-mlat"),
         "mlat": mlat_from_journal(),
         "receiver": receiver,
+        "receiver_age_s": receiver_age(now),
         "aircraft": aircraft,
         "messages_total": messages_total,
         "message_rate": msg_rate,
         "unique_today": None,
         "range_today": None,
     }
+    snapshot["feeders"] = feeder_states(snapshot)
+    snapshot["alerts"] = health_alerts(snapshot, _BAD_SINCE, now)
     with LOCK:
         LAST.clear()
         LAST.update(snapshot)
