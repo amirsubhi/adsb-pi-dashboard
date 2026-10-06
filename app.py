@@ -692,10 +692,13 @@ def health_alerts(snap, bad_since, now):
         found.append(("receiver", "warning", "No data from the receiver. %s." % rx["detail"], RECEIVER_STALE_AFTER))
     for key, name, delay in (("fr24", "FlightRadar24", 120), ("adsbx", "ADSBExchange", 90)):
         f = feeders.get(key, {})
+        detail = re.sub(r"^MLAT ", "", f.get("detail", "").split("; ", 1)[-1])
+        if detail[1:2].islower():  # "No link..." reads as "no link..." mid-sentence; "MLAT ..." stays
+            detail = detail[:1].lower() + detail[1:]
         if f.get("state") in ("down", "stopped"):
-            found.append((key, "warning", "%s feed is down: %s." % (name, f["detail"]), delay))
+            found.append((key, "warning", "%s feed is down: %s." % (name, detail), delay))
         elif f.get("state") == "degraded":
-            found.append((key + "-mlat", "caution", "%s MLAT isn't working: %s." % (name, f["detail"].split("; ", 1)[-1]), 600))
+            found.append((key + "-mlat", "caution", "%s MLAT isn't working: %s." % (name, detail), 600))
     if temp is not None and temp >= 75:
         found.append(("temp", "caution", "CPU at %.0f °C. Check cooling." % temp, None))
     elif temp is not None and temp >= 70:

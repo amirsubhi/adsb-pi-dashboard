@@ -213,13 +213,20 @@ class HealthTest(TempDataDir):
         fr = dict(self.snap()["fr24"], link_status="connecting")
         s, since = self.snap(fr24=fr), {}
         app.health_alerts(s, since, 0.0)
-        self.assertIn("No link to FlightRadar24", app.health_alerts(s, since, 121.0)[0]["text"])
+        self.assertEqual(app.health_alerts(s, since, 121.0)[0]["text"], "FlightRadar24 feed is down: no link to FlightRadar24 (connecting).")
 
     def test_mlat_problems_are_a_slow_caution(self):
         s, since = self.snap(adsbx_mlat_active="failed"), {}
         app.health_alerts(s, since, 0.0)
         self.assertEqual(app.health_alerts(s, since, 599.0), [])
         self.assertEqual([(a["id"], a["level"]) for a in app.health_alerts(s, since, 600.0)], [("adsbx-mlat", "caution")])
+
+    def test_alert_wording(self):
+        fr = dict(self.snap()["fr24"], mlat_status="not running")
+        s, since = self.snap(fr24=fr, adsbx_feed_active="inactive"), {}
+        app.health_alerts(s, since, 0.0)
+        self.assertEqual([a["text"] for a in app.health_alerts(s, since, 600.0)],
+                         ["ADSBExchange feed is down: adsbexchange-feed is stopped.", "FlightRadar24 MLAT isn't working: not running."])
 
     def test_boot_grace_holds_feeders_but_not_power(self):
         s, since = self.snap(uptime_s=120, adsbx_feed_active="activating", throttled={"undervoltage_now": True}), {}
